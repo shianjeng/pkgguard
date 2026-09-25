@@ -1,0 +1,13 @@
+{
+  "name": "pkgguard",
+  "version": "0.1.0",
+  "description": "Stops coding agents from installing hallucinated, typosquatted, malicious or freshly hijacked npm and PyPI packages.",
+  "author": {
+    "name": "Hank Zhu",
+    "url": "https://github.com/shianjeng"
+  },
+  "homepage": "https://github.com/shianjeng/pkgguard",
+  "repository": "https://github.com/shianjeng/pkgguard",
+  "license": "MIT",
+  "keywords": ["security", "supply-chain", "npm", "pypi", "typosquatting", "slopsquatting"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "pkgguard",
+  "owner": {
+    "name": "Hank Zhu"
+  },
+  "description": "Supply-chain guard for coding agents: checks npm and PyPI packages before they are installed.",
+  "plugins": [
+    {
+      "name": "pkgguard",
+      "source": "./",
+      "description": "Checks npm and PyPI packages before your agent installs them, and blocks the bad ones."
+    }
+  ]
+}
