@@ -1,6 +1,6 @@
 {
   "name": "pkgguard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Stops coding agents from installing hallucinated, typosquatted, malicious or freshly hijacked npm and PyPI packages.",
   "keywords": [
     "agent-skill",

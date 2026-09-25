@@ -59,7 +59,8 @@ test('duplicates are reported once', () => {
 });
 
 test('spec parsing', () => {
-  assert.equal(parseNpmSpec('Lodash'), null, 'npm names are lowercase');
+  assert.equal(parseNpmSpec('JSONStream').name, 'JSONStream', 'legacy names may contain capitals');
+  assert.equal(parseNpmSpec('@Scope/pkg'), null, 'scopes are lowercase');
   assert.deepEqual(parseNpmSpec('@scope/pkg@next'), { ecosystem: 'npm', name: '@scope/pkg', requested: 'next', version: null });
   assert.equal(parsePySpec('pkg @ https://example.com/pkg.whl'), null);
   assert.equal(parsePySpec('numpy==1.*').version, null);
@@ -70,4 +71,44 @@ test('pre-check matches install commands and skips everything else cheaply', () 
   assert.ok(MAYBE_INSTALL.test('cd x && npm i y'));
   assert.ok(MAYBE_INSTALL.test('python3 -m pip install x'));
   assert.ok(!MAYBE_INSTALL.test('ls -la && git status'));
+});
+
+test('redirections are not package names', () => {
+  assert.deepEqual(names('npm i lodash > install.log 2>&1'), ['npm:lodash']);
+  assert.deepEqual(names('npm i lodash >> log.txt; pip install httpx 2> err.txt'), ['npm:lodash', 'pypi:httpx']);
+  assert.deepEqual(names('npm i zod &> out.txt'), ['npm:zod']);
+  assert.deepEqual(names('npm i zod < /dev/null'), ['npm:zod']);
+  assert.deepEqual(names('npm i zod 1>&2'), ['npm:zod']);
+});
+
+test('here-document bodies are data', () => {
+  assert.deepEqual(names("cat > notes.md <<'EOF'\nnpm i not-really\nEOF\nnpm i zod"), ['npm:zod']);
+  assert.deepEqual(names('cat <<-END\n\tpip install nope\n\tEND\npip install httpx'), ['pypi:httpx']);
+  assert.deepEqual(names('grep x <<< "npm i nope"'), []);
+});
+
+test('shell -c, eval and command substitution are scanned', () => {
+  assert.deepEqual(names('bash -lc "npm i expresss"'), ['npm:expresss']);
+  assert.deepEqual(names("sh -c 'cd web && pip install reqeusts'"), ['pypi:reqeusts']);
+  assert.deepEqual(names('eval "npm install zod"'), ['npm:zod']);
+  assert.deepEqual(names('echo `npm i expresss`'), ['npm:expresss']);
+  assert.deepEqual(names('echo "$(npx cowsay hi)"'), ['npm:cowsay']);
+  assert.deepEqual(names("echo 'npm i quoted-is-text'"), []);
+  assert.deepEqual(names('npm i $(cat list.txt)'), [], 'a computed name cannot be checked');
+});
+
+test('global options before the subcommand', () => {
+  assert.deepEqual(names('npm -g install expresss'), ['npm:expresss']);
+  assert.deepEqual(names('npm --prefix web install zod'), ['npm:zod']);
+  assert.deepEqual(names('pnpm -C web add zod'), ['npm:zod']);
+  assert.deepEqual(names('yarn --cwd web add zod'), ['npm:zod']);
+  assert.deepEqual(names('pip -q install httpx'), ['pypi:httpx']);
+  assert.deepEqual(names('uv --directory api add httpx'), ['pypi:httpx']);
+  assert.deepEqual(names('poetry -C api add httpx'), ['pypi:httpx']);
+});
+
+test('deno npm: specifiers', () => {
+  assert.deepEqual(names('deno add npm:zod jsr:@std/path'), ['npm:zod']);
+  assert.deepEqual(names('deno run -A npm:cowsay@1.6.0 hi'), ['npm:cowsay@1.6.0']);
+  assert.deepEqual(names('deno run main.ts'), []);
 });

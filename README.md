@@ -71,7 +71,7 @@ Exit codes: `0` OK, `1` WARN, `2` BLOCK.
 | Deprecated, yanked, or has known vulnerabilities | WARN |
 | Fewer than 100 downloads last week | WARN |
 
-It understands `npm`/`pnpm`/`yarn`/`bun` installs, `npx`/`pnpm dlx`/`bunx`/`yarn dlx`, `pip`/`python -m pip`, `uv add`/`uv pip install`/`uvx`, `pipx`, `poetry`, `pdm` and `rye`, including chained commands, `sudo`, env assignments, aliases (`x@npm:y`) and version specifiers. Local paths, URLs, git sources and lockfile installs (`npm ci`, `pip install -r`) are skipped.
+It understands `npm`/`pnpm`/`yarn`/`bun` installs, `npx`/`pnpm dlx`/`bunx`/`yarn dlx`, Deno `npm:` specifiers, `pip`/`python -m pip`, `uv add`/`uv pip install`/`uvx`, `pipx`, `poetry`, `pdm` and `rye`. It reads through chained commands, `bash -c`/`sh -c`, `eval`, `$(...)` and backquotes, `sudo`, env assignments and global options (`npm -g install`, `pnpm -C dir add`), and ignores redirection targets and here-document bodies. Version ranges are resolved the way npm resolves them (`react@^17` is checked as 17.0.2), and PyPI versions are compared the way pip compares them (`==2.0` matches 2.0.0). Local paths, URLs, git sources and lockfile installs (`npm ci`, `pip install -r`) are skipped.
 
 Lookalikes are compared against the 5,000 most downloaded packages on each registry. Popular packages are never flagged, and a lookalike with more than 50,000 weekly downloads is assumed to be its own project (`preact` is not a typo of `react`).
 

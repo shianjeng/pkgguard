@@ -12,10 +12,11 @@ export const PACKAGES = {
     'left-pad': { created: 3500, versions: { '1.3.0': 2500 }, downloads: 2_000_000, repo: true, deprecated: 'use String.prototype.padStart()' },
     'shiny-new-cli': { created: 2, versions: { '0.1.0': 2 }, downloads: 20, repo: true, scripts: { postinstall: 'node setup.js' } },
     chalky: { created: 900, versions: { '5.0.0': 400, '5.0.1': 0.5 }, downloads: 3_000_000, repo: true, provenance: ['5.0.0'], publishers: { '5.0.0': 'sindre', '5.0.1': 'someone-else' } },
+    'gone-pkg': { created: 800, versions: {}, downloads: 0, repo: false, unpublished: true },
     crossenv: { created: 3000, versions: { '0.0.2-security': 2000 }, downloads: 1500, repo: false, description: 'security holding package' },
   },
   pypi: {
-    requests: { created: 5000, versions: { '2.32.3': 300 }, downloads: 200_000_000, repo: true },
+    requests: { created: 5000, versions: { '2.0.0': 4000, '2.32.3': 300 }, downloads: 200_000_000, repo: true },
     'sketchy-build': { created: 400, versions: { '1.0': 400 }, downloads: 5000, repo: true, sdistOnly: true },
   },
 };
@@ -27,7 +28,7 @@ export const VULNS = {
 
 function npmDoc(name, p) {
   const versions = {};
-  const time = { created: iso(p.created) };
+  const time = { created: iso(p.created), ...(p.unpublished ? { unpublished: { time: iso(10) } } : {}) };
   for (const [v, age] of Object.entries(p.versions)) {
     time[v] = iso(age);
     versions[v] = {

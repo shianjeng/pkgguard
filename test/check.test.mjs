@@ -81,6 +81,28 @@ test('a version that does not exist is blocked', async () => {
   assert.ok(codes(result).includes('block:missing-version'));
 });
 
+test('npm ranges are checked against the version that would be installed', async () => {
+  const pinned = await check('npm i "lodash@<4.17.21"');
+  assert.equal(pinned.version, '4.17.20');
+  assert.ok(codes(pinned).includes('warn:vulnerable'));
+  assert.equal((await check('npm i lodash@^4.17.0')).version, '4.17.21');
+  const impossible = await check('npm i lodash@^9');
+  assert.ok(codes(impossible).includes('warn:no-match'));
+});
+
+test('PyPI versions compare the way pip does', async () => {
+  const result = await check('pip install requests==2.0');
+  assert.equal(result.version, '2.0.0');
+  assert.ok(!codes(result).includes('block:missing-version'));
+  assert.ok(codes(await check('pip install requests==2.0.1')).includes('block:missing-version'));
+});
+
+test('unpublished npm packages are blocked', async () => {
+  const result = await check('npm i gone-pkg');
+  assert.equal(result.verdict, 'block');
+  assert.match(result.findings[0].text, /was unpublished/);
+});
+
 test('sdist-only python packages warn about build code', async () => {
   const result = await check('pip install sketchy-build');
   assert.equal(result.verdict, 'warn');
