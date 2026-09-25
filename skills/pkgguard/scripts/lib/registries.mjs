@@ -1,5 +1,6 @@
 // Thin clients for the public registries pkgguard reads. Every function
 // resolves to plain facts; judging them happens in check.mjs.
+import { findPep440, resolveRange } from './versions.mjs';
 
 const TIMEOUT_MS = 8000;
 const USER_AGENT = 'pkgguard (+https://github.com/shianjeng/pkgguard)';
@@ -31,10 +32,17 @@ export async function npmFacts(name, requested, options) {
   const tags = doc['dist-tags'] ?? {};
   const time = doc.time ?? {};
   const versions = Object.keys(doc.versions ?? {});
-  let version = tags.latest ?? versions.at(-1) ?? null;
+  if (!versions.length) return { exists: false, unpublished: Boolean(time.unpublished) };
+  let version = tags.latest ?? versions.at(-1);
+  let requestedExists = true;
   if (requested) {
-    if (doc.versions?.[requested]) version = requested;
+    if (doc.versions[requested]) version = requested;
     else if (tags[requested]) version = tags[requested];
+    else {
+      const resolved = resolveRange(versions, requested, tags.latest);
+      if (resolved) version = resolved;
+      else requestedExists = false;
+    }
   }
   const manifest = doc.versions?.[version] ?? {};
   const byTime = versions.filter((v) => time[v]).sort((a, b) => Date.parse(time[a]) - Date.parse(time[b]));
@@ -52,7 +60,7 @@ export async function npmFacts(name, requested, options) {
     latest: tags.latest ?? null,
     version,
     versionExists: Boolean(doc.versions?.[version]),
-    requestedExists: !requested || Boolean(doc.versions?.[requested] || tags[requested]),
+    requestedExists,
     versionCount: versions.length,
     created: time.created ?? null,
     versionTime: time[version] ?? null,
@@ -89,7 +97,8 @@ export async function pypiFacts(name, requested, options) {
     .filter(([, files]) => files.length)
     .map(([v, files]) => [v, earliest(files)])
     .sort((a, b) => Date.parse(a[1]) - Date.parse(b[1]));
-  const version = requested && releases[requested] ? requested : doc.info.version;
+  const match = requested ? findPep440(Object.keys(releases), requested) : null;
+  const version = match ?? doc.info.version;
   const files = releases[version] ?? [];
   const index = released.findIndex(([v]) => v === version);
   const urls = doc.info.project_urls ?? {};
@@ -103,7 +112,7 @@ export async function pypiFacts(name, requested, options) {
     latest: doc.info.version,
     version,
     versionExists: Boolean(releases[version]?.length),
-    requestedExists: !requested || Boolean(releases[requested]),
+    requestedExists: !requested || Boolean(match && releases[match].length),
     versionCount: released.length,
     created: released[0]?.[1] ?? null,
     versionTime: earliest(files),

@@ -2,21 +2,80 @@
 // Only explicit names count: `npm install` with no arguments installs from
 // the lockfile and is left alone.
 
-const OPERATORS = new Set([';', '&&', '||', '|', '&', '(', ')', '\n']);
+const OPERATORS = new Set([';', '&', '|', '(', ')']);
+const MAX_DEPTH = 5;
 
-export function tokenize(command) {
+// Splits a command into simple commands (arrays of words). Redirection
+// targets and here-document bodies are dropped, and the bodies of `$(...)`
+// and backquote substitutions are returned separately so they can be scanned
+// as commands of their own.
+function scan(command) {
   const segments = [[]];
+  const nested = [];
+  const heredocs = [];
   let token = null;
   let quote = null;
+  let skipWord = false;
+
   const push = () => {
-    if (token !== null) segments.at(-1).push(token);
+    if (token !== null) {
+      if (skipWord) skipWord = false;
+      else segments.at(-1).push(token);
+    }
     token = null;
   };
+  const split = () => {
+    push();
+    skipWord = false;
+    segments.push([]);
+  };
+  const substitutionEnd = (start, closer) => {
+    if (closer === '`') {
+      const end = command.indexOf('`', start);
+      return end === -1 ? command.length : end;
+    }
+    let depth = 1;
+    let q = null;
+    for (let j = start; j < command.length; j++) {
+      const c = command[j];
+      if (q) {
+        if (c === q) q = null;
+        else if (c === '\\' && q === '"') j++;
+      } else if (c === "'" || c === '"') q = c;
+      else if (c === '\\') j++;
+      else if (c === '(') depth++;
+      else if (c === ')' && --depth === 0) return j;
+    }
+    return command.length;
+  };
+  const skipHeredocBodies = (newline) => {
+    let j = newline + 1;
+    while (heredocs.length) {
+      const { delimiter, stripTabs } = heredocs.shift();
+      while (j < command.length) {
+        const nl = command.indexOf('\n', j);
+        const end = nl === -1 ? command.length : nl;
+        const line = stripTabs ? command.slice(j, end).replace(/^\t+/, '') : command.slice(j, end);
+        j = end + 1;
+        if (line === delimiter) break;
+      }
+    }
+    return j - 1;
+  };
+
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
     if (quote === "'") {
       if (ch === "'") quote = null;
       else token += ch;
+      continue;
+    }
+    if (ch === '`' || (ch === '$' && command[i + 1] === '(')) {
+      const open = ch === '`' ? i + 1 : i + 2;
+      const end = substitutionEnd(open, ch === '`' ? '`' : ')');
+      nested.push(command.slice(open, end));
+      token = `${token ?? ''}\0`; // the word exists, but its value is unknown
+      i = end;
       continue;
     }
     if (quote === '"') {
@@ -39,16 +98,51 @@ export function tokenize(command) {
       while (i + 1 < command.length && command[i + 1] !== '\n') i++;
       continue;
     }
-    const two = command.slice(i, i + 2);
-    if (two === '&&' || two === '||') {
+    if (ch === '>' || ch === '<' || (ch === '&' && command[i + 1] === '>')) {
+      if (token !== null && /^\d+$/.test(token)) token = null; // "2>" names a file descriptor
       push();
-      segments.push([]);
+      let j = ch === '&' ? i + 1 : i;
+      const op = command[j++];
+      if (op === '<' && command[j] === '<') {
+        j++;
+        if (command[j] === '<') {
+          skipWord = true; // <<< here-string
+          i = j;
+          continue;
+        }
+        const stripTabs = command[j] === '-';
+        if (stripTabs) j++;
+        while (command[j] === ' ' || command[j] === '\t') j++;
+        const m = /^(['"]?)([^\s'"<>;&|()]+)\1/.exec(command.slice(j));
+        if (m) {
+          heredocs.push({ delimiter: m[2], stripTabs });
+          j += m[0].length;
+        }
+        i = j - 1;
+        continue;
+      }
+      if (command[j] === '>' || command[j] === '|') j++;
+      if (command[j] === '&') {
+        j++; // >&2, 2>&1, <&- duplicate a descriptor and take no word
+        while (/[0-9-]/.test(command[j] ?? '')) j++;
+      } else {
+        skipWord = true;
+      }
+      i = j - 1;
+      continue;
+    }
+    if (ch === '\n') {
+      split();
+      if (heredocs.length) i = skipHeredocBodies(i);
+      continue;
+    }
+    if ((ch === '&' || ch === '|') && command[i + 1] === ch) {
+      split();
       i++;
       continue;
     }
     if (OPERATORS.has(ch)) {
-      push();
-      segments.push([]);
+      split();
       continue;
     }
     if (ch === ' ' || ch === '\t' || ch === '\r') {
@@ -58,12 +152,17 @@ export function tokenize(command) {
     token = (token ?? '') + ch;
   }
   push();
-  return segments.filter((s) => s.length);
+  return { segments: segments.filter((s) => s.length), nested };
+}
+
+export function tokenize(command) {
+  return scan(command).segments;
 }
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const WRAPPERS = new Set(['sudo', 'env', 'time', 'nice', 'nohup', 'command', 'exec', 'doas']);
 const WRAPPER_VALUE_FLAGS = new Set(['-u', '-g', '-n', '-C', '-h', '-p', '-U']);
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
 
 function unwrap(tokens) {
   let i = 0;
@@ -93,7 +192,7 @@ const NODE_VALUE_FLAGS = new Set([
   '--registry', '--prefix', '-w', '--workspace', '--tag', '--save-prefix', '--cache', '--userconfig',
   '--omit', '--include', '-C', '--dir', '--filter', '-F', '--cwd', '--otp', '--scope', '--config',
   '--network-concurrency', '--cpu', '--os', '--libc', '--reporter', '--backend', '--shell', '--call', '-c',
-  '--node-options', '--loglevel',
+  '--node-options', '--loglevel', '--import-map', '--lock', '--cert', '--location', '--env-file', '--root',
 ]);
 const PY_VALUE_FLAGS = new Set([
   '-r', '--requirement', '-c', '--constraint', '-e', '--editable', '-i', '--index-url', '--extra-index-url',
@@ -102,7 +201,7 @@ const PY_VALUE_FLAGS = new Set([
   '--retries', '--timeout', '--trusted-host', '--cert', '--client-cert', '--cache-dir', '--python', '-p',
   '--group', '-G', '--source', '--extra', '-E', '--index', '--default-index', '--optional', '--dev-group',
   '--directory', '--project', '--package', '--with', '--python-platform', '--spec', '--pip-args', '--suffix',
-  '--global', '--interpreter', '--allow-insecure-host',
+  '--global', '--interpreter', '--allow-insecure-host', '-C', '--config-settings', '--config-file',
 ]);
 
 function positionals(args, valueFlags) {
@@ -147,13 +246,26 @@ function firstPositional(args, valueFlags) {
   return null;
 }
 
-const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+// Skips global options that come before the subcommand: `npm -g install x`,
+// `pnpm -C web add x`, `pip -q install x`.
+function subcommand(args, valueFlags) {
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
+    if (!args[i].includes('=') && valueFlags.has(args[i])) i++;
+    i++;
+  }
+  return { sub: args[i], rest: args.slice(i + 1) };
+}
+
+// Scopes are lowercase; unscoped names from before 2017 may contain capitals (JSONStream).
+const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/[a-z0-9-~][a-z0-9-._~]*|[A-Za-z0-9-~][A-Za-z0-9-._~]*)$/;
 const EXACT_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
 export function parseNpmSpec(spec) {
   let s = spec.trim();
-  if (!s || /^(\.|\/|~|file:|link:|workspace:|portal:|patch:|git\+|git:|https?:|github:|gitlab:|bitbucket:)/.test(s)) return null;
+  if (!s || /^(\.|\/|~|file:|link:|workspace:|portal:|patch:|git\+|git:|https?:|github:|gitlab:|bitbucket:|jsr:)/.test(s)) return null;
   if (/\.(tgz|tar\.gz)$/.test(s)) return null;
+  s = s.replace(/^npm:/, '');
   const alias = /^[^@]+@npm:(.+)$/.exec(s) ?? /^@[^/]+\/[^@]+@npm:(.+)$/.exec(s);
   if (alias) s = alias[1];
   const at = s.lastIndexOf('@');
@@ -190,42 +302,44 @@ export function parsePySpec(spec) {
 }
 
 const NPM_INSTALL = new Set(['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add']);
+const one = (value) => (value ? [value] : []);
 
 function detectNode(program, args) {
-  const specs = [];
-  const sub = args[0];
-  const rest = args.slice(1);
   if (program === 'npx' || program === 'pnpx' || program === 'bunx') {
     const packages = flagValues(args, new Set(['-p', '--package']));
-    if (packages.length) return packages;
-    const first = firstPositional(args, NODE_VALUE_FLAGS);
-    return first ? [first] : [];
+    return packages.length ? packages : one(firstPositional(args, NODE_VALUE_FLAGS));
   }
+  const { sub, rest } = subcommand(args, NODE_VALUE_FLAGS);
   if (program === 'npm' || program === 'cnpm') {
-    if (NPM_INSTALL.has(sub)) specs.push(...positionals(rest, NODE_VALUE_FLAGS));
-    else if (sub === 'exec' || sub === 'x') {
+    if (NPM_INSTALL.has(sub)) return positionals(rest, NODE_VALUE_FLAGS);
+    if (sub === 'exec' || sub === 'x') {
       const packages = flagValues(rest, new Set(['-p', '--package']));
-      specs.push(...(packages.length ? packages : [firstPositional(rest, NODE_VALUE_FLAGS)].filter(Boolean)));
+      return packages.length ? packages : one(firstPositional(rest, NODE_VALUE_FLAGS));
     }
-    return specs;
+    return [];
   }
   if (program === 'pnpm') {
-    if (sub === 'add' || sub === 'install' || sub === 'i') specs.push(...positionals(rest, NODE_VALUE_FLAGS));
-    else if (sub === 'dlx') specs.push(...[firstPositional(rest, NODE_VALUE_FLAGS)].filter(Boolean));
-    return specs;
+    if (sub === 'add' || sub === 'install' || sub === 'i') return positionals(rest, NODE_VALUE_FLAGS);
+    if (sub === 'dlx') return one(firstPositional(rest, NODE_VALUE_FLAGS));
+    return [];
   }
   if (program === 'yarn') {
-    if (sub === 'add') specs.push(...positionals(rest, NODE_VALUE_FLAGS));
-    else if (sub === 'global' && rest[0] === 'add') specs.push(...positionals(rest.slice(1), NODE_VALUE_FLAGS));
-    else if (sub === 'dlx') specs.push(...[firstPositional(rest, NODE_VALUE_FLAGS)].filter(Boolean));
-    return specs;
+    if (sub === 'add') return positionals(rest, NODE_VALUE_FLAGS);
+    if (sub === 'global' && rest[0] === 'add') return positionals(rest.slice(1), NODE_VALUE_FLAGS);
+    if (sub === 'dlx') return one(firstPositional(rest, NODE_VALUE_FLAGS));
+    return [];
   }
   if (program === 'bun') {
-    if (sub === 'add' || sub === 'a' || sub === 'install' || sub === 'i') specs.push(...positionals(rest, NODE_VALUE_FLAGS));
-    else if (sub === 'x') specs.push(...[firstPositional(rest, NODE_VALUE_FLAGS)].filter(Boolean));
-    return specs;
+    if (sub === 'add' || sub === 'a' || sub === 'install' || sub === 'i') return positionals(rest, NODE_VALUE_FLAGS);
+    if (sub === 'x') return one(firstPositional(rest, NODE_VALUE_FLAGS));
+    return [];
   }
-  return specs;
+  if (program === 'deno') {
+    // Deno only reaches npm through explicit npm: specifiers.
+    const specs = sub === 'run' || sub === 'x' ? one(firstPositional(rest, NODE_VALUE_FLAGS)) : ['add', 'install', 'i'].includes(sub) ? positionals(rest, NODE_VALUE_FLAGS) : [];
+    return specs.filter((s) => s.startsWith('npm:'));
+  }
+  return [];
 }
 
 function detectPython(program, args) {
@@ -234,27 +348,26 @@ function detectPython(program, args) {
     if (m === -1 || args[m + 1] !== 'pip') return [];
     return detectPython('pip', args.slice(m + 2));
   }
-  const sub = args[0];
-  const rest = args.slice(1);
+  if (program === 'uvx') {
+    const from = flagValues(args, new Set(['--from']));
+    return from.length ? from : one(firstPositional(args, PY_VALUE_FLAGS));
+  }
+  const { sub, rest } = subcommand(args, PY_VALUE_FLAGS);
   if (/^pip(\d+(\.\d+)?)?$/.test(program)) return sub === 'install' ? positionals(rest, PY_VALUE_FLAGS) : [];
   if (program === 'uv') {
     if (sub === 'pip' && rest[0] === 'install') return positionals(rest.slice(1), PY_VALUE_FLAGS);
     if (sub === 'add') return positionals(rest, PY_VALUE_FLAGS);
     if (sub === 'tool' && (rest[0] === 'install' || rest[0] === 'run')) {
       const from = flagValues(rest.slice(1), new Set(['--from']));
-      return from.length ? from : [firstPositional(rest.slice(1), PY_VALUE_FLAGS)].filter(Boolean);
+      return from.length ? from : one(firstPositional(rest.slice(1), PY_VALUE_FLAGS));
     }
     return [];
-  }
-  if (program === 'uvx') {
-    const from = flagValues(args, new Set(['--from']));
-    return from.length ? from : [firstPositional(args, PY_VALUE_FLAGS)].filter(Boolean);
   }
   if (program === 'pipx') {
     if (sub === 'install') return positionals(rest, PY_VALUE_FLAGS);
     if (sub === 'run') {
       const spec = flagValues(rest, new Set(['--spec']));
-      return spec.length ? spec : [firstPositional(rest, PY_VALUE_FLAGS)].filter(Boolean);
+      return spec.length ? spec : one(firstPositional(rest, PY_VALUE_FLAGS));
     }
     return [];
   }
@@ -262,16 +375,29 @@ function detectPython(program, args) {
   return [];
 }
 
-const NODE_PROGRAMS = new Set(['npm', 'cnpm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx']);
+const NODE_PROGRAMS = new Set(['npm', 'cnpm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'deno']);
 
-export function findInstalls(command) {
-  const found = [];
-  const seen = new Set();
-  for (const segment of tokenize(String(command ?? ''))) {
+function collect(command, found, seen, depth) {
+  if (depth > MAX_DEPTH) return;
+  const { segments, nested } = scan(command);
+  for (const inner of nested) collect(inner, found, seen, depth + 1);
+  for (const segment of segments) {
     const tokens = unwrap(segment);
     if (!tokens.length) continue;
     const program = basename(tokens[0]);
     const args = tokens.slice(1);
+
+    // bash -c "npm i x", bash -lc '...', eval "..."
+    if (SHELLS.has(program)) {
+      const flag = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
+      if (flag !== -1 && args[flag + 1] !== undefined) collect(args[flag + 1], found, seen, depth + 1);
+      continue;
+    }
+    if (program === 'eval') {
+      collect(args.join(' '), found, seen, depth + 1);
+      continue;
+    }
+
     const isNode = NODE_PROGRAMS.has(program);
     const specs = isNode ? detectNode(program, args) : detectPython(program, args);
     for (const spec of specs) {
@@ -283,8 +409,13 @@ export function findInstalls(command) {
       found.push({ ...pkg, spec });
     }
   }
+}
+
+export function findInstalls(command) {
+  const found = [];
+  collect(String(command ?? ''), found, new Set(), 0);
   return found;
 }
 
 // Cheap pre-check so the hook can skip the vast majority of shell commands.
-export const MAYBE_INSTALL = /\b(npm|cnpm|npx|pnpm|pnpx|yarn|bunx?|pip\d*(\.\d+)?|pipx|uvx?|poetry|pdm|rye|python\d*(\.\d+)?)\b/;
+export const MAYBE_INSTALL = /\b(npm|cnpm|npx|pnpm|pnpx|yarn|bunx?|deno|pip\d*(\.\d+)?|pipx|uvx?|poetry|pdm|rye|python\d*(\.\d+)?)\b/;

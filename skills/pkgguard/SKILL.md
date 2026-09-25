@@ -11,7 +11,7 @@ Package names you produce from memory can be wrong, and attackers register the w
 
 Run it before any command that installs or executes a package by name:
 
-- `npm install <pkg>`, `npm i`, `pnpm add`, `yarn add`, `bun add`, `npx <pkg>`, `pnpm dlx`, `bunx`
+- `npm install <pkg>`, `npm i`, `pnpm add`, `yarn add`, `bun add`, `npx <pkg>`, `pnpm dlx`, `bunx`, `deno add npm:<pkg>`
 - `pip install <pkg>`, `python -m pip install`, `uv add`, `uv pip install`, `uvx`, `pipx install`, `poetry add`, `pdm add`
 
 You don't need it for `npm install`, `npm ci`, `pip install -r requirements.txt` or `uv sync` with no new package names: those install what the lockfile already pins.

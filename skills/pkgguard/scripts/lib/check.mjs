@@ -18,7 +18,10 @@ const REGISTRY = { npm: 'npm', pypi: 'PyPI' };
 
 function ago(iso, now) {
   const ms = now - Date.parse(iso);
-  if (ms < 2 * DAY) return `${Math.max(1, Math.round(ms / HOUR))} hours ago`;
+  if (ms < 2 * DAY) {
+    const hours = Math.max(1, Math.round(ms / HOUR));
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
   return `${Math.round(ms / DAY)} days ago`;
 }
 
@@ -65,7 +68,9 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now() } = {}) {
     add(
       'block',
       'missing',
-      `"${name}" does not exist on ${registry}. The name may be hallucinated, or the package lives on a private registry.` +
+      (facts.unpublished
+        ? `"${name}" was unpublished from ${registry} and has no versions to install.`
+        : `"${name}" does not exist on ${registry}. The name may be hallucinated, or the package lives on a private registry.`) +
         (similar ? ` Did you mean "${similar.name}"?` : ''),
     );
     return { ...pkg, verdict: verdictOf(findings), findings, facts: { exists: false, downloads }, suggestion: similar?.name ?? null };
@@ -76,6 +81,8 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now() } = {}) {
   }
   if (pkg.version && !facts.requestedExists) {
     add('block', 'missing-version', `Version ${pkg.version} does not exist (latest is ${facts.latest}).`);
+  } else if (pkg.requested && !facts.requestedExists) {
+    add('warn', 'no-match', `No published version matches "${pkg.requested}", so the install will fail. Checked ${facts.latest} instead.`);
   }
 
   if (similar && (downloads === null || downloads < LIMITS.lookalikeSafeDownloads)) {
@@ -140,7 +147,7 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now() } = {}) {
 
   return {
     ...pkg,
-    version: facts.version,
+    version: pkg.version && !facts.requestedExists ? pkg.version : facts.version,
     verdict: verdictOf(findings),
     findings,
     facts: { ...facts, downloads },
