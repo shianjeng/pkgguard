@@ -18,7 +18,7 @@ test('npm family', () => {
   assert.deepEqual(names('npm i --registry https://r.example.com --save-exact chalk'), ['npm:chalk']);
   assert.deepEqual(names('npm install'), [], 'a bare install uses the lockfile');
   assert.deepEqual(names('npm ci && npm run build'), []);
-  assert.deepEqual(names('npm install ./local ../x file:../y git+https://g/x.git user/repo https://x/y.tgz'), []);
+  assert.deepEqual(names('npm install ./local ../x file:../y ./pkg.tgz'), [], 'local paths are the user\'s own code');
   assert.deepEqual(names('npm i my-alias@npm:real-pkg@1.0.0'), ['npm:real-pkg@1.0.0']);
   assert.deepEqual(names('pnpm add -D vitest && yarn add zod && bun add hono'), ['npm:vitest', 'npm:zod', 'npm:hono']);
   assert.deepEqual(names('yarn global add typescript'), ['npm:typescript']);
@@ -62,7 +62,7 @@ test('spec parsing', () => {
   assert.equal(parseNpmSpec('JSONStream').name, 'JSONStream', 'legacy names may contain capitals');
   assert.equal(parseNpmSpec('@Scope/pkg'), null, 'scopes are lowercase');
   assert.deepEqual(parseNpmSpec('@scope/pkg@next'), { ecosystem: 'npm', name: '@scope/pkg', requested: 'next', version: null });
-  assert.equal(parsePySpec('pkg @ https://example.com/pkg.whl'), null);
+  assert.equal(parsePySpec('pkg @ https://example.com/pkg.whl').kind, 'external');
   assert.equal(parsePySpec('numpy==1.*').version, null);
   assert.equal(parsePySpec('numpy===1.26').version, '1.26');
 });
@@ -94,7 +94,7 @@ test('shell -c, eval and command substitution are scanned', () => {
   assert.deepEqual(names('echo `npm i expresss`'), ['npm:expresss']);
   assert.deepEqual(names('echo "$(npx cowsay hi)"'), ['npm:cowsay']);
   assert.deepEqual(names("echo 'npm i quoted-is-text'"), []);
-  assert.deepEqual(names('npm i $(cat list.txt)'), [], 'a computed name cannot be checked');
+  assert.deepEqual(names('npm i $(cat list.txt)'), ['npm:$(…)'], 'a computed name is reported, not dropped');
 });
 
 test('global options before the subcommand', () => {
@@ -111,4 +111,30 @@ test('deno npm: specifiers', () => {
   assert.deepEqual(names('deno add npm:zod jsr:@std/path'), ['npm:zod']);
   assert.deepEqual(names('deno run -A npm:cowsay@1.6.0 hi'), ['npm:cowsay@1.6.0']);
   assert.deepEqual(names('deno run main.ts'), []);
+});
+
+const kinds = (command) => findInstalls(command).map((p) => `${p.kind ?? 'registry'}:${p.name}`);
+
+test('sources outside the registry are reported as external', () => {
+  assert.deepEqual(kinds('npm i https://x.example/a.tgz github:user/repo user/repo#main git+ssh://git@github.com/u/r.git'), [
+    'external:https://x.example/a.tgz',
+    'external:github:user/repo',
+    'external:user/repo#main',
+    'external:git+ssh://git@github.com/u/r.git',
+  ]);
+  assert.deepEqual(kinds('pip install git+https://github.com/u/r "pkg @ https://x/y.whl" ./dist/x.whl'), [
+    'external:git+https://github.com/u/r',
+    'external:pkg @ https://x/y.whl',
+  ]);
+  assert.deepEqual(kinds('deno add jsr:@std/path'), [], 'JSR is a registry of its own, not an external source');
+});
+
+test('names known only at run time are reported as computed', () => {
+  assert.deepEqual(kinds('npm i $PKG "lodash@$VER" ${NAME}'), ['computed:$PKG', 'computed:lodash@$VER', 'computed:${NAME}']);
+  assert.deepEqual(kinds('cat pkgs.txt | xargs npm i'), ['computed:<xargs input>']);
+  assert.deepEqual(kinds('xargs -I{} npm install {}@latest < list'), ['computed:<xargs input>@latest']);
+  assert.deepEqual(kinds('xargs -n 1 -P 4 pip install < req.txt'), ['computed:<xargs input>']);
+  assert.deepEqual(kinds('xargs -0 sudo npm i -g'), ['computed:<xargs input>']);
+  assert.deepEqual(kinds('xargs echo npm i'), [], 'only install commands count');
+  assert.deepEqual(kinds('echo $HOME && ls'), []);
 });

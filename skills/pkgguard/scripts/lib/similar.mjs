@@ -16,7 +16,8 @@ export function popular(ecosystem) {
         .filter((l) => l && !l.startsWith('#'));
     } catch {}
     if (ecosystem === 'pypi') names = names.map(normalizePyName);
-    cache.set(ecosystem, { names, set: new Set(names) });
+    const scopes = new Set(names.filter((n) => n.startsWith('@')).map((n) => n.slice(1).split('/')[0]));
+    cache.set(ecosystem, { names, set: new Set(names), scopes });
   }
   return cache.get(ecosystem);
 }
@@ -60,8 +61,8 @@ const AFFIXES = [
 export function lookalike(ecosystem, name) {
   const { names, set } = popular(ecosystem);
   if (set.has(name)) return null;
-  const bare = name.startsWith('@') ? null : name;
-  if (!bare) return null; // scoped npm names are owned by their scope
+  if (name.startsWith('@')) return scopedLookalike(name);
+  const bare = name;
   const stripped = strip(bare);
   for (let rank = 0; rank < names.length; rank++) {
     const target = names[rank];
@@ -72,6 +73,25 @@ export function lookalike(ecosystem, name) {
     }
     if (rank < 500 && target.length >= 4 && AFFIXES.some((affix) => affix(target) === bare)) {
       return { name: target, rank, reason: 'the name with a prefix or suffix added' };
+    }
+  }
+  return null;
+}
+
+// Only a scope's owner can publish inside it, so a name under a known scope
+// (@types/whatever) cannot be a squat. A look-alike scope can:
+// @typescript_eslint/parser for @typescript-eslint/parser.
+function scopedLookalike(name) {
+  const { names, scopes } = popular('npm');
+  const [scope, bare] = name.slice(1).split('/');
+  if (!bare || scopes.has(scope)) return null;
+  const close = (a, b) => strip(a) === strip(b) || (a.length >= 4 && b.length >= 4 && editDistance(a, b, 1) <= 1);
+  for (let rank = 0; rank < names.length; rank++) {
+    const target = names[rank];
+    if (!target.startsWith('@')) continue;
+    const [targetScope, targetBare] = target.slice(1).split('/');
+    if (close(scope, targetScope) && (bare === targetBare || close(bare, targetBare))) {
+      return { name: target, rank, reason: `a different scope that looks like @${targetScope}` };
     }
   }
   return null;

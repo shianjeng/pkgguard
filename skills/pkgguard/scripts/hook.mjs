@@ -30,7 +30,7 @@ try {
     if (packages.length) {
       const { checkAll } = await import('./lib/check.mjs');
       const { overall, renderResults } = await import('./lib/report.mjs');
-      const results = await checkAll(packages);
+      const results = await checkAll(packages, { cwd: typeof input.cwd === 'string' ? input.cwd : process.cwd() });
       const verdict = overall(results);
       const text = renderResults(results);
       if (verdict === 'block') {

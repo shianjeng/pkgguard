@@ -261,17 +261,27 @@ function subcommand(args, valueFlags) {
 const NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/[a-z0-9-~][a-z0-9-._~]*|[A-Za-z0-9-~][A-Za-z0-9-._~]*)$/;
 const EXACT_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 
+// Code fetched from a URL or a git host never passes through the registry, so
+// none of the registry checks apply to it.
+const NPM_REMOTE = /^(git\+|git:|https?:|github:|gitlab:|bitbucket:|gist:)/;
+const LOCAL_PATH = /^(\.|\/|~|file:|link:|workspace:|portal:|patch:|jsr:)/;
+
+function external(ecosystem, spec) {
+  return { ecosystem, kind: 'external', name: spec, requested: null, version: null };
+}
+
 export function parseNpmSpec(spec) {
   let s = spec.trim();
-  if (!s || /^(\.|\/|~|file:|link:|workspace:|portal:|patch:|git\+|git:|https?:|github:|gitlab:|bitbucket:|jsr:)/.test(s)) return null;
-  if (/\.(tgz|tar\.gz)$/.test(s)) return null;
+  if (!s || LOCAL_PATH.test(s)) return null;
+  if (NPM_REMOTE.test(s)) return external('npm', s);
+  if (/\.(tgz|tar\.gz)$/.test(s)) return null; // a tarball on disk
   s = s.replace(/^npm:/, '');
   const alias = /^[^@]+@npm:(.+)$/.exec(s) ?? /^@[^/]+\/[^@]+@npm:(.+)$/.exec(s);
   if (alias) s = alias[1];
   const at = s.lastIndexOf('@');
   const name = at > 0 ? s.slice(0, at) : s;
   const requested = at > 0 ? s.slice(at + 1) : null;
-  if (!name.startsWith('@') && name.includes('/')) return null; // github shorthand user/repo
+  if (!name.startsWith('@') && /^[\w.-]+\/[\w.-]+(#.*)?$/.test(s)) return external('npm', s); // GitHub shorthand user/repo
   if (!NPM_NAME.test(name)) return null;
   return {
     ecosystem: 'npm',
@@ -287,8 +297,9 @@ export function normalizePyName(name) {
 
 export function parsePySpec(spec) {
   const s = spec.trim().split(';')[0].trim();
-  if (!s || /^(\.|\/|~|git\+|https?:|file:|[a-zA-Z]:\\)/.test(s)) return null;
-  if (/\.(whl|tar\.gz|zip|tgz)$/i.test(s) || s.includes('/') || /\s@\s/.test(spec)) return null;
+  if (!s || /^(\.|\/|~|file:|[a-zA-Z]:\\)/.test(s)) return null;
+  if (/^(git\+|hg\+|svn\+|bzr\+|https?:)/.test(s) || /\s@\s/.test(spec)) return external('pypi', s);
+  if (/\.(whl|tar\.gz|zip|tgz)$/i.test(s) || s.includes('/')) return null; // an archive on disk
   const match = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(\[[^\]]*\])?\s*(.*)$/.exec(s);
   if (!match) return null;
   const constraint = match[3].trim();
@@ -377,38 +388,76 @@ function detectPython(program, args) {
 
 const NODE_PROGRAMS = new Set(['npm', 'cnpm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'deno']);
 
+const XARGS_VALUE_FLAGS = new Set(['-a', '-d', '-E', '-e', '-I', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter',
+  '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var']);
+
+// A word whose value only exists at run time: a variable or a command substitution.
+const COMPUTED = /[\0\x01]|\$[A-Za-z_{(0-9@*#?!-]/;
+
+function computed(ecosystem, spec) {
+  return { ecosystem, kind: 'computed', name: spec.replace(/\0/g, '$(…)').replace(/\x01/g, '<xargs input>'), requested: null, version: null };
+}
+
+// `xargs npm i` appends its input to the command, `xargs -I{} npm i {}`
+// substitutes it. Either way the package names are only known at run time, so
+// the input becomes a computed word.
+function xargsCommand(args) {
+  let replace = null;
+  let i = 0;
+  while (i < args.length && args[i].startsWith('-') && args[i] !== '--') {
+    const arg = args[i];
+    const inline = /^(-I|-i|--replace=?)(.+)$/.exec(arg);
+    if (inline) replace = inline[2];
+    else if (arg === '-I' || arg === '--replace') replace = args[i + 1];
+    else if (arg === '-i') replace = '{}';
+    if (!arg.includes('=') && XARGS_VALUE_FLAGS.has(arg)) i++;
+    i++;
+  }
+  if (args[i] === '--') i++;
+  const command = args.slice(i);
+  if (!command.length) return [];
+  return replace ? command.map((word) => word.split(replace).join('\x01')) : [...command, '\x01'];
+}
+
+function inspect(tokens, found, seen, depth) {
+  tokens = unwrap(tokens);
+  if (!tokens.length) return;
+  const program = basename(tokens[0]);
+  const args = tokens.slice(1);
+
+  // bash -c "npm i x", bash -lc '...', eval "..."
+  if (SHELLS.has(program)) {
+    const flag = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
+    if (flag !== -1 && args[flag + 1] !== undefined) collect(args[flag + 1], found, seen, depth + 1);
+    return;
+  }
+  if (program === 'eval') {
+    collect(args.join(' '), found, seen, depth + 1);
+    return;
+  }
+  if (program === 'xargs') {
+    inspect(xargsCommand(args), found, seen, depth + 1);
+    return;
+  }
+
+  const isNode = NODE_PROGRAMS.has(program);
+  const ecosystem = isNode ? 'npm' : 'pypi';
+  const specs = isNode ? detectNode(program, args) : detectPython(program, args);
+  for (const spec of specs) {
+    const pkg = COMPUTED.test(spec) ? computed(ecosystem, spec) : isNode ? parseNpmSpec(spec) : parsePySpec(spec);
+    if (!pkg) continue;
+    const key = `${pkg.ecosystem}:${pkg.kind ?? 'registry'}:${pkg.name}@${pkg.requested ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ ...pkg, spec });
+  }
+}
+
 function collect(command, found, seen, depth) {
   if (depth > MAX_DEPTH) return;
   const { segments, nested } = scan(command);
   for (const inner of nested) collect(inner, found, seen, depth + 1);
-  for (const segment of segments) {
-    const tokens = unwrap(segment);
-    if (!tokens.length) continue;
-    const program = basename(tokens[0]);
-    const args = tokens.slice(1);
-
-    // bash -c "npm i x", bash -lc '...', eval "..."
-    if (SHELLS.has(program)) {
-      const flag = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
-      if (flag !== -1 && args[flag + 1] !== undefined) collect(args[flag + 1], found, seen, depth + 1);
-      continue;
-    }
-    if (program === 'eval') {
-      collect(args.join(' '), found, seen, depth + 1);
-      continue;
-    }
-
-    const isNode = NODE_PROGRAMS.has(program);
-    const specs = isNode ? detectNode(program, args) : detectPython(program, args);
-    for (const spec of specs) {
-      const pkg = isNode ? parseNpmSpec(spec) : parsePySpec(spec);
-      if (!pkg) continue;
-      const key = `${pkg.ecosystem}:${pkg.name}@${pkg.requested ?? ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      found.push({ ...pkg, spec });
-    }
-  }
+  for (const segment of segments) inspect(segment, found, seen, depth);
 }
 
 export function findInstalls(command) {
@@ -418,4 +467,4 @@ export function findInstalls(command) {
 }
 
 // Cheap pre-check so the hook can skip the vast majority of shell commands.
-export const MAYBE_INSTALL = /\b(npm|cnpm|npx|pnpm|pnpx|yarn|bunx?|deno|pip\d*(\.\d+)?|pipx|uvx?|poetry|pdm|rye|python\d*(\.\d+)?)\b/;
+export const MAYBE_INSTALL = /\b(xargs|npm|cnpm|npx|pnpm|pnpx|yarn|bunx?|deno|pip\d*(\.\d+)?|pipx|uvx?|poetry|pdm|rye|python\d*(\.\d+)?)\b/;

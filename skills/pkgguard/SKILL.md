@@ -30,7 +30,7 @@ Or name packages directly:
 node scripts/pkgguard.mjs npm:zod pypi:httpx==0.27.0
 ```
 
-It needs Node.js 18 or newer and network access to the npm registry, PyPI, pypistats.org and api.osv.dev. Add `--json` for structured output. Exit code: 0 OK, 1 WARN, 2 BLOCK.
+It needs Node.js 22 or newer and network access to the npm registry, PyPI, pypistats.org and api.osv.dev. Add `--json` for structured output. Exit code: 0 OK, 1 WARN, 2 BLOCK.
 
 ## What to do with the result
 
@@ -38,7 +38,11 @@ It needs Node.js 18 or newer and network access to the npm registry, PyPI, pypis
 - **WARN**: show the user each finding in one line, then ask before you install. For a fresh release, offer the previous version the report names.
 - **BLOCK**: do not install. Tell the user what was found. If the report suggests a popular package ("Did you mean `requests`?"), ask the user whether that is what they meant. **Never swap in a different package name on your own**, and never retry with a variation of the blocked name. Guessing is how typosquats get installed.
 
-If the registry can't be reached, the result is WARN with "not checked". Say so rather than treating it as OK.
+Lines starting with `·` are notes, such as a routine fresh release or a long-standing install script. They don't need the user's attention unless they ask.
+
+If a source can't be reached, the report says which check did not run ("not checked", "Could not reach OSV"). Say so rather than treating it as OK.
+
+Scoped packages that your `.npmrc` maps to a private registry (`@corp:registry=...`) are not looked up publicly and pass with a note.
 
 ## Checks
 
@@ -47,12 +51,14 @@ If the registry can't be reached, the result is WARN with "not checked". Say so 
 | Name doesn't exist on the registry | BLOCK |
 | Reported as malware (OSV / GitHub advisories), or replaced by npm's security placeholder | BLOCK |
 | Requested version doesn't exist | BLOCK |
-| Looks like a popular package (one character off, separators changed, affix added) with under 1,000 weekly downloads | BLOCK |
+| Looks like a popular package (one character off, separators changed, affix added, or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
 | First published under 7 days ago and runs an install script | BLOCK |
-| Same lookalike with 1,000–50,000 weekly downloads | WARN |
+| Same lookalike with 1,000–50,000 weekly downloads, or with download counts unavailable | WARN |
 | First published under 30 days ago | WARN |
-| This version published under 72 hours ago (with publisher changes noted) | WARN |
-| Dropped the build provenance the previous version had (npm) | WARN |
-| Runs `preinstall` / `install` / `postinstall` scripts (npm), or ships no wheel (PyPI) | WARN |
+| This version is under 72 hours old **and** something else changed: a different publisher, dropped build provenance, new install scripts, or wheels no longer shipped | WARN |
+| Runs `preinstall` / `install` / `postinstall` scripts, unless the package is widely used and earlier versions ran them too | WARN |
+| Ships no wheel, so `setup.py` runs (PyPI) | WARN |
+| Installs from a URL or git repository, or the package name is computed at run time (`$PKG`, `$(...)`, `xargs`) | WARN |
 | Deprecated, yanked, or has known vulnerabilities | WARN |
+| OSV could not be reached, so malware and vulnerability data are missing | WARN |
 | Fewer than 100 downloads last week | WARN |

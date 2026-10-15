@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -66,7 +68,72 @@ test('a fresh release that dropped provenance and changed publisher warns', asyn
   assert.match(fresh.text, /12 hours ago/);
   assert.match(fresh.text, /chalky@5\.0\.0/);
   assert.match(fresh.text, /"someone-else"/);
-  assert.ok(codes(result).includes('warn:provenance'));
+  assert.match(fresh.text, /5\.0\.0 had build provenance/);
+  assert.equal(fresh.level, 'warn');
+});
+
+test('a fresh release with nothing else changed is only a note', async () => {
+  const result = await check('npm i daily-types');
+  assert.equal(result.verdict, 'info');
+  assert.deepEqual(codes(result), ['info:fresh']);
+  assert.match(result.findings[0].text, /same publisher and provenance as 1\.0\.0/);
+});
+
+test('a fresh release that adds an install script warns', async () => {
+  const result = await check('npm i sneaky-update');
+  assert.equal(result.verdict, 'warn');
+  assert.match(result.findings.find((f) => f.code === 'fresh').text, /adds install scripts the previous version did not have/);
+  assert.ok(codes(result).includes('warn:install-script'));
+});
+
+test('long-standing install scripts on a popular package are a note', async () => {
+  const result = await check('npm i esbuildish');
+  assert.equal(result.verdict, 'info');
+  assert.match(result.findings.find((f) => f.code === 'install-script').text, /as earlier versions did/);
+});
+
+test('a fresh PyPI release that stopped shipping wheels warns', async () => {
+  const result = await check('pip install wheel-dropper');
+  assert.equal(result.verdict, 'warn');
+  assert.match(result.findings.find((f) => f.code === 'fresh').text, /1\.0 shipped wheels/);
+});
+
+test('URLs, git sources and computed names warn without network calls', async () => {
+  const fetchImpl = fakeFetch();
+  for (const command of ['npm i github:user/repo', 'pip install git+https://g.example/r', 'xargs npm i < list']) {
+    const result = await check(command, fetchImpl);
+    assert.equal(result.verdict, 'warn', command);
+  }
+  assert.deepEqual(fetchImpl.calls, []);
+});
+
+test('missing OSV data is a visible warning', async () => {
+  const fetchImpl = fakeFetch({ 'api.osv.dev': () => new Response('blocked', { status: 403 }) });
+  const result = await check('npm i lodash', fetchImpl);
+  assert.equal(result.verdict, 'warn');
+  assert.match(result.findings.find((f) => f.code === 'osv-unreachable').text, /malware reports and known vulnerabilities were not checked/);
+});
+
+test('missing download counts are shown, and keep a lookalike at WARN with the reason', async () => {
+  const offline = { 'api.npmjs.org': () => { throw new TypeError('fetch failed'); } };
+  const ok = await check('npm i lodash', fakeFetch(offline));
+  assert.equal(ok.verdict, 'info');
+  assert.ok(codes(ok).includes('info:downloads-unavailable'));
+  const squat = await check('npm i expresss', fakeFetch(offline));
+  assert.equal(squat.verdict, 'warn');
+  assert.match(squat.findings.find((f) => f.code === 'lookalike').text, /could not be ruled out/);
+  assert.match(renderResults([squat]), /· Download counts were unavailable/, 'notes are printed even under WARN');
+});
+
+test('scoped packages from a private registry are not looked up publicly', async () => {
+  const fetchImpl = fakeFetch();
+  const [pkg] = findInstalls('npm i @corp/internal-utils');
+  const registries = new Map([['@corp', 'https://token:secret@npm.corp.example/']]);
+  const result = await checkPackage(pkg, { fetchImpl, now: NOW, registries });
+  assert.equal(result.verdict, 'info');
+  assert.match(result.findings[0].text, /@corp installs from https:\/\/npm\.corp\.example\//);
+  assert.doesNotMatch(result.findings[0].text, /secret/, 'credentials in the URL are not echoed');
+  assert.deepEqual(fetchImpl.calls, []);
 });
 
 test('deprecations and known vulnerabilities warn', async () => {
@@ -132,6 +199,9 @@ test('lookalike detection', () => {
   assert.equal(lookalike('npm', 'cross_env').name, 'cross-env');
   assert.equal(lookalike('pypi', 'python-requests')?.name, 'requests');
   assert.equal(lookalike('npm', '@evil/lodash'), null);
+  assert.equal(lookalike('npm', '@typescript_eslint/parser')?.name, '@typescript-eslint/parser');
+  assert.equal(lookalike('npm', '@bable/core')?.name, '@babel/core');
+  assert.equal(lookalike('npm', '@types/nodee'), null, 'only DefinitelyTyped can publish under @types');
   assert.equal(lookalike('npm', 'my-company-internal-tool'), null);
 });
 
@@ -178,4 +248,16 @@ test('hook: broken input never blocks', async () => {
   assert.equal(code, 1);
   assert.equal(stdout, '');
   assert.match(stderr, /pkgguard hook skipped/);
+});
+
+test('hook: a private scope from the project .npmrc is not denied', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgguard-npmrc-'));
+  fs.writeFileSync(path.join(dir, '.npmrc'), '@corp:registry=https://npm.corp.example/\n');
+  try {
+    const { code, stdout } = await runHook({ ...bash('npm i @corp/does-not-exist-publicly'), cwd: dir });
+    assert.equal(code, 0);
+    assert.equal(stdout, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
