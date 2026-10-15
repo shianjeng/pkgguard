@@ -26,6 +26,15 @@ function repoUrl(value) {
   return url ? url.replace(/^git\+/, '').replace(/\.git$/, '') : null;
 }
 
+function installScripts(manifest) {
+  const scripts = {};
+  for (const hook of ['preinstall', 'install', 'postinstall']) {
+    if (manifest.scripts?.[hook]) scripts[hook] = manifest.scripts[hook];
+  }
+  if (manifest.gypfile && !scripts.install) scripts.install = 'node-gyp rebuild';
+  return scripts;
+}
+
 export async function npmFacts(name, requested, options) {
   const doc = await getJson(`https://registry.npmjs.org/${encodeNpm(name)}`, options);
   if (!doc) return { exists: false };
@@ -48,11 +57,7 @@ export async function npmFacts(name, requested, options) {
   const byTime = versions.filter((v) => time[v]).sort((a, b) => Date.parse(time[a]) - Date.parse(time[b]));
   const previous = byTime[byTime.indexOf(version) - 1] ?? null;
   const previousManifest = previous ? doc.versions[previous] : null;
-  const scripts = {};
-  for (const hook of ['preinstall', 'install', 'postinstall']) {
-    if (manifest.scripts?.[hook]) scripts[hook] = manifest.scripts[hook];
-  }
-  if (manifest.gypfile && !scripts.install) scripts.install = 'node-gyp rebuild';
+  const scripts = installScripts(manifest);
 
   return {
     exists: true,
@@ -66,6 +71,7 @@ export async function npmFacts(name, requested, options) {
     versionTime: time[version] ?? null,
     previous,
     previousTime: previous ? time[previous] : null,
+    previousScripts: previousManifest ? installScripts(previousManifest) : null,
     publisher: manifest._npmUser?.name ?? null,
     previousPublisher: previousManifest?._npmUser?.name ?? null,
     provenance: Boolean(manifest.dist?.attestations),
@@ -82,6 +88,10 @@ export async function npmFacts(name, requested, options) {
 export async function npmDownloads(name, options) {
   const data = await getJson(`https://api.npmjs.org/downloads/point/last-week/${encodeNpm(name)}`, options);
   return data?.downloads ?? 0;
+}
+
+function sdistOnly(files) {
+  return files.length > 0 && !files.some((f) => f.packagetype === 'bdist_wheel');
 }
 
 export async function pypiFacts(name, requested, options) {
@@ -118,7 +128,8 @@ export async function pypiFacts(name, requested, options) {
     versionTime: earliest(files),
     previous: index > 0 ? released[index - 1][0] : null,
     previousTime: index > 0 ? released[index - 1][1] : null,
-    sdistOnly: files.length > 0 && !files.some((f) => f.packagetype === 'bdist_wheel'),
+    sdistOnly: sdistOnly(files),
+    previousSdistOnly: index > 0 ? sdistOnly(releases[released[index - 1][0]]) : null,
     yanked: files.length > 0 && files.every((f) => f.yanked),
     yankedReason: files.find((f) => f.yanked_reason)?.yanked_reason ?? null,
     description: doc.info.summary ?? '',

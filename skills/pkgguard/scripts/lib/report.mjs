@@ -11,6 +11,8 @@ function compact(n) {
 }
 
 function headline(result) {
+  if (result.kind === 'external') return `${result.name} (${result.ecosystem}, not from the registry)`;
+  if (result.kind === 'computed') return `${result.name} (${result.ecosystem}, name computed at run time)`;
   const id = result.version ? `${result.name}@${result.version}` : result.name;
   const bits = [];
   const facts = result.facts;
@@ -30,10 +32,8 @@ export function renderResults(results, { command = null } = {}) {
   );
   for (const r of results) {
     lines.push(`${MARK[r.verdict]} ${LABEL[r.verdict]} ${headline(r)}`);
-    for (const f of r.findings) {
-      if (f.level === 'info' && r.verdict !== 'ok' && r.verdict !== 'info') continue;
-      lines.push(`    - ${f.text}`);
-    }
+    // Every finding is shown, notes included: a check that could not run must not look like a pass.
+    for (const f of r.findings) lines.push(`    ${f.level === 'info' ? '·' : '-'} ${f.text}`);
   }
   lines.push('');
   if (verdict === 'block') {

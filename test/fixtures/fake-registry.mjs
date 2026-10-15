@@ -13,11 +13,18 @@ export const PACKAGES = {
     'shiny-new-cli': { created: 2, versions: { '0.1.0': 2 }, downloads: 20, repo: true, scripts: { postinstall: 'node setup.js' } },
     chalky: { created: 900, versions: { '5.0.0': 400, '5.0.1': 0.5 }, downloads: 3_000_000, repo: true, provenance: ['5.0.0'], publishers: { '5.0.0': 'sindre', '5.0.1': 'someone-else' } },
     'gone-pkg': { created: 800, versions: {}, downloads: 0, repo: false, unpublished: true },
+    // ships every day; a fresh release with nothing else changed
+    'daily-types': { created: 2000, versions: { '1.0.0': 3, '1.0.1': 1 }, downloads: 5_000_000, repo: true, provenance: ['1.0.0', '1.0.1'] },
+    // a popular package whose install script has always been there
+    esbuildish: { created: 1500, versions: { '0.20.0': 100, '0.21.0': 30 }, downloads: 40_000_000, repo: true, scripts: { postinstall: 'node install.js' } },
+    // a fresh release that adds an install script
+    'sneaky-update': { created: 1500, versions: { '2.0.0': 200, '2.0.1': 0.3 }, downloads: 200_000, repo: true, scriptsByVersion: { '2.0.1': { postinstall: 'node x.js' } } },
     crossenv: { created: 3000, versions: { '0.0.2-security': 2000 }, downloads: 1500, repo: false, description: 'security holding package' },
   },
   pypi: {
     requests: { created: 5000, versions: { '2.0.0': 4000, '2.32.3': 300 }, downloads: 200_000_000, repo: true },
     'sketchy-build': { created: 400, versions: { '1.0': 400 }, downloads: 5000, repo: true, sdistOnly: true },
+    'wheel-dropper': { created: 900, versions: { '1.0': 300, '1.1': 1 }, downloads: 100_000, repo: true, sdistOnlyVersions: ['1.1'] },
   },
 };
 
@@ -34,7 +41,7 @@ function npmDoc(name, p) {
     versions[v] = {
       name,
       version: v,
-      scripts: p.scripts ?? {},
+      scripts: p.scriptsByVersion?.[v] ?? p.scripts ?? {},
       deprecated: p.deprecated,
       repository: p.repo ? { url: `git+https://github.com/example/${name}.git` } : undefined,
       dist: p.provenance?.includes(v) ? { attestations: { url: 'x' } } : {},
@@ -50,7 +57,7 @@ function pypiDoc(name, p) {
   for (const [v, age] of Object.entries(p.versions)) {
     releases[v] = [
       { packagetype: 'sdist', upload_time_iso_8601: iso(age), yanked: false },
-      ...(p.sdistOnly ? [] : [{ packagetype: 'bdist_wheel', upload_time_iso_8601: iso(age), yanked: false }]),
+      ...(p.sdistOnly || p.sdistOnlyVersions?.includes(v) ? [] : [{ packagetype: 'bdist_wheel', upload_time_iso_8601: iso(age), yanked: false }]),
     ];
   }
   return {
