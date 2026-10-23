@@ -163,7 +163,11 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
         `${when}, and ${signals.join('; ')}. Hijacked releases look like this; consider ${name}@${facts.previous} until this one has been out a few days.`,
       );
     } else {
-      add('info', 'fresh', `${when}; same publisher and provenance as ${facts.previous}, and no new install scripts.`);
+      const unchanged =
+        ecosystem === 'npm'
+          ? `same publisher and provenance as ${facts.previous}, and no new install scripts`
+          : `it still ships wheels, as ${facts.previous} did`;
+      add('info', 'fresh', `${when}; ${unchanged}.`);
     }
   } else if (provenanceDropped) {
     add('info', 'provenance', `${facts.previous} was published with build provenance but ${facts.version} was not.`);
@@ -205,7 +209,30 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
   });
 }
 
-export async function checkAll(packages, { cwd = process.cwd(), env = process.env, ...options } = {}) {
+const CONCURRENCY = 8;
+
+// Checks every package, at most CONCURRENCY at a time so a long manifest does
+// not open hundreds of requests at once. With a cache, clean results from the
+// last few hours are reused.
+export async function checkAll(packages, { cwd = process.cwd(), env = process.env, cache = null, ...options } = {}) {
   const registries = options.registries ?? scopeRegistries(cwd, env);
-  return Promise.all(packages.map((pkg) => checkPackage(pkg, { ...options, registries })));
+  const results = new Array(packages.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < packages.length) {
+      const index = next++;
+      const pkg = packages[index];
+      const hit = cache?.get(pkg);
+      if (hit) {
+        results[index] = { ...hit, from: pkg.from, cached: true };
+        continue;
+      }
+      const result = await checkPackage(pkg, { ...options, registries });
+      cache?.set(pkg, result);
+      results[index] = result;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, packages.length) }, worker));
+  cache?.save();
+  return results;
 }

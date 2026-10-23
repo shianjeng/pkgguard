@@ -1,0 +1,67 @@
+name: pkgguard
+description: Check a project's npm and PyPI dependencies for hallucinated, typosquatted, malicious and freshly hijacked packages.
+author: Hank Zhu
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: Project directory to scan (package.json, pyproject.toml, requirements*.txt).
+    default: "."
+  new-only:
+    description: Only check dependencies the lockfile does not pin yet. Faster on large projects; catches what a pull request adds.
+    default: "false"
+  fail-on:
+    description: Lowest verdict that fails the step, "block" or "warn".
+    default: block
+
+outputs:
+  verdict:
+    description: ok, info, warn or block.
+    value: ${{ steps.scan.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        NEW_ONLY: ${{ inputs.new-only }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        PKGGUARD: ${{ github.action_path }}/skills/pkgguard/scripts/pkgguard.mjs
+      run: |
+        case "$FAIL_ON" in block|warn) ;; *) echo "::error title=pkgguard::fail-on must be block or warn, got '$FAIL_ON'"; exit 2 ;; esac
+        args=(scan "$SCAN_PATH" --no-cache --fail-on warn)
+        [ "$NEW_ONLY" = "true" ] && args+=(--new-only)
+
+        set +e
+        report="$(node "$PKGGUARD" "${args[@]}")"
+        code=$?
+        set -e
+        printf '%s\n' "$report"
+        if [ "$code" -ge 3 ]; then exit "$code"; fi
+
+        verdict=ok
+        [ "$code" -eq 1 ] && verdict=warn
+        [ "$code" -eq 2 ] && verdict=block
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### pkgguard: $(printf '%s' "$verdict" | tr '[:lower:]' '[:upper:]')"
+          echo
+          echo '```'
+          printf '%s\n' "$report"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # One annotation per flagged package, so the problem shows on the run page.
+        printf '%s\n' "$report" | while IFS= read -r line; do
+          case "$line" in
+            "✗ BLOCK "*) echo "::error title=pkgguard::${line#✗ BLOCK }" ;;
+            "! WARN  "*) echo "::warning title=pkgguard::${line#! WARN  }" ;;
+          esac
+        done
+
+        if [ "$verdict" = block ] || { [ "$verdict" = warn ] && [ "$FAIL_ON" = warn ]; }; then exit 1; fi

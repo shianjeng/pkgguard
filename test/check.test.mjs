@@ -210,7 +210,8 @@ function runHook(input, env = {}) {
     const child = execFile(
       process.execPath,
       ['--import', path.join(ROOT, 'test/fixtures/install-fake-fetch.mjs'), path.join(ROOT, 'skills/pkgguard/scripts/hook.mjs')],
-      { env: { ...process.env, ...env } },
+      // Never touch the real cache: these results come from the fake registry.
+      { env: { ...process.env, PKGGUARD_NO_CACHE: '1', ...env } },
       (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }),
     );
     child.stdin.end(typeof input === 'string' ? input : JSON.stringify(input));
@@ -257,6 +258,30 @@ test('hook: a private scope from the project .npmrc is not denied', async () => 
     const { code, stdout } = await runHook({ ...bash('npm i @corp/does-not-exist-publicly'), cwd: dir });
     assert.equal(code, 0);
     assert.equal(stdout, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('hook: a typosquat added to package.json is caught on a bare npm install', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgguard-bare-'));
+  fs.mkdirSync(path.join(dir, 'web'));
+  fs.writeFileSync(path.join(dir, 'web', 'package.json'), JSON.stringify({ dependencies: { lodash: '^4.17.0', expresss: '*' } }));
+  try {
+    const out = JSON.parse((await runHook({ ...bash('cd web && npm install'), cwd: dir })).stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, 'deny');
+    assert.match(out.permissionDecisionReason, /expresss@0\.0\.0 \(npm\).*from web\/package\.json/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('hook: a bare install with everything locked stays silent', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgguard-locked-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { expresss: '*' } }));
+  fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/expresss': { version: '0.0.0' } } }));
+  try {
+    assert.deepEqual(await runHook({ ...bash('npm install'), cwd: dir }), { code: 0, stdout: '', stderr: '' });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

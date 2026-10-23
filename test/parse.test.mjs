@@ -16,7 +16,7 @@ test('tokenizer splits on shell operators and respects quotes', () => {
 test('npm family', () => {
   assert.deepEqual(names('npm install lodash react@18.2.0 -D @types/node@^20'), ['npm:lodash', 'npm:react@18.2.0', 'npm:@types/node']);
   assert.deepEqual(names('npm i --registry https://r.example.com --save-exact chalk'), ['npm:chalk']);
-  assert.deepEqual(names('npm install'), [], 'a bare install uses the lockfile');
+  assert.deepEqual(findInstalls('npm install').map((p) => `${p.kind}:${p.path}`), ['manifest:package.json'], 'a bare install reads package.json');
   assert.deepEqual(names('npm ci && npm run build'), []);
   assert.deepEqual(names('npm install ./local ../x file:../y ./pkg.tgz'), [], 'local paths are the user\'s own code');
   assert.deepEqual(names('npm i my-alias@npm:real-pkg@1.0.0'), ['npm:real-pkg@1.0.0']);
@@ -40,7 +40,10 @@ test('python family', () => {
     'pypi:pandas',
     'pypi:flask',
   ]);
-  assert.deepEqual(names('pip install -r requirements.txt -e . --index-url https://x/simple'), []);
+  assert.deepEqual(
+    findInstalls('pip install -r requirements.txt -e . --index-url https://x/simple').map((p) => `${p.kind}:${p.path}`),
+    ['manifest:requirements.txt'],
+  );
   assert.deepEqual(names('python3 -m pip install Django_REST.framework'), ['pypi:django-rest-framework']);
   assert.deepEqual(names('uv add httpx && uv pip install rich && uvx ruff check'), ['pypi:httpx', 'pypi:rich', 'pypi:ruff']);
   assert.deepEqual(names('uvx --from black==24.1.0 black .'), ['pypi:black@24.1.0']);

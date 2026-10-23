@@ -61,6 +61,27 @@ npx github:shianjeng/pkgguard --cmd "npm install left-pad zod"
 
 Exit codes: `0` OK, `1` WARN, `2` BLOCK. Needs Node.js 22 or newer.
 
+### Scan a project
+
+```bash
+npx @shianjeng/pkgguard scan              # every direct dependency here
+npx @shianjeng/pkgguard scan --new-only   # only what the lockfile doesn't pin yet
+```
+
+`scan` reads `package.json`, `pyproject.toml` (PEP 621, dependency groups and Poetry) and `requirements*.txt`. Clean packages are folded into one line so the findings stay readable.
+
+### GitHub Action
+
+```yaml
+- uses: actions/checkout@v7
+- uses: shianjeng/pkgguard@v0
+  with:
+    new-only: true      # check what a pull request adds; drop it to check everything
+    # fail-on: warn     # default: block
+```
+
+The step fails on BLOCK (or WARN with `fail-on: warn`), annotates each flagged package, writes the report to the job summary, and sets a `verdict` output.
+
 The npm package is scoped because npm refuses the bare name `pkgguard` as too close to an unrelated `pkg-guard`. Nobody can publish `pkgguard` itself, and only this project can publish under `@shianjeng`. `npm install -g @shianjeng/pkgguard` installs a `pkgguard` command.
 
 ## What it checks
@@ -82,7 +103,7 @@ The npm package is scoped because npm refuses the bare name `pkgguard` as too cl
 | OSV could not be reached, so malware and vulnerability data are missing | WARN |
 | Fewer than 100 downloads last week | WARN |
 
-It understands `npm`/`pnpm`/`yarn`/`bun` installs, `npx`/`pnpm dlx`/`bunx`/`yarn dlx`, Deno `npm:` specifiers, `pip`/`python -m pip`, `uv add`/`uv pip install`/`uvx`, `pipx`, `poetry`, `pdm` and `rye`. It reads through chained commands, `bash -c`/`sh -c`, `eval`, `$(...)` and backquotes, `sudo`, env assignments and global options (`npm -g install`, `pnpm -C dir add`), and ignores redirection targets and here-document bodies. Version ranges are resolved the way npm resolves them (`react@^17` is checked as 17.0.2), and PyPI versions are compared the way pip compares them (`==2.0` matches 2.0.0). Local paths and lockfile installs (`npm ci`, `pip install -r`) are skipped. URLs, git sources, and names that only exist at run time (`npm i $PKG`, `xargs npm i`) can't be checked, so they WARN instead of passing silently.
+It understands `npm`/`pnpm`/`yarn`/`bun` installs, `npx`/`pnpm dlx`/`bunx`/`yarn dlx`, Deno `npm:` specifiers, `pip`/`python -m pip`, `uv add`/`uv pip install`/`uvx`, `pipx`, `poetry`, `pdm` and `rye`. It reads through chained commands, `bash -c`/`sh -c`, `eval`, `$(...)` and backquotes, `sudo`, env assignments and global options (`npm -g install`, `pnpm -C dir add`), and ignores redirection targets and here-document bodies. Version ranges are resolved the way npm resolves them (`react@^17` is checked as 17.0.2), and PyPI versions are compared the way pip compares them (`==2.0` matches 2.0.0). Local paths and `npm ci` are skipped. URLs, git sources, and names that only exist at run time (`npm i $PKG`, `xargs npm i`) can't be checked, so they WARN instead of passing silently.
 
 Lookalikes are compared against the 5,000 most downloaded packages on each registry. Popular packages are never flagged, and a lookalike with more than 50,000 weekly downloads is assumed to be its own project (`preact` is not a typo of `react`). A name inside a known scope is never a lookalike, because only the scope's owner can publish there; a look-alike scope is.
 
@@ -90,11 +111,32 @@ Warnings are kept for things worth stopping for. A release a day old from the us
 
 Data comes from the npm registry, PyPI, [pypistats.org](https://pypistats.org), and [OSV.dev](https://osv.dev). No account, API key, or telemetry. Popular-package lists come from [wooorm/npm-high-impact](https://github.com/wooorm/npm-high-impact) and [hugovk/top-pypi-packages](https://github.com/hugovk/top-pypi-packages); refresh them with `npm run update-popular`.
 
+### Bare installs read the manifest
+
+An agent doesn't have to name a package to install it: it can add `"expresss": "*"` to `package.json` and run `npm install`, or add a line to `requirements.txt` and run `pip install -r requirements.txt`. pkgguard follows those commands to the file, including `cd web && npm install`, and checks the dependencies the lockfile doesn't pin yet:
+
+```
+$ pkgguard --cmd "cd web && npm install"
+✗ BLOCK expresss@0.0.0 (npm) · 329 downloads/week · since 2016 · from web/package.json
+    - Looks like the popular package "express" (one character off), but has only 329 downloads last week. Possible typosquat.
+```
+
+Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), `pip install -r` and `uv pip install -r`/`uv pip sync` (nested `-r` files included), and `uv sync`, `poetry install`, `pdm install` (lockfiles: `uv.lock`, `poetry.lock`, `pdm.lock`). Dependencies already in the lockfile were installed before and are skipped, so a routine `npm install` costs nothing; a version range the locked version no longer satisfies is checked again. At most 50 packages are checked per command; the rest are reported, and `pkgguard scan` checks them all.
+
+### Configuration
+
+| Variable | |
+| --- | --- |
+| `PKGGUARD_ON_WARN` | What the Claude Code hook does on WARN: `ask` (default), `deny`, or `allow`. |
+| `PKGGUARD_NO_CACHE` | Set to re-check everything. By default clean results are reused for 6 hours, so retried installs are instant; flagged packages are always checked again. |
+| `PKGGUARD_CACHE_DIR` | Where the cache lives. Default: `$XDG_CACHE_HOME/pkgguard` or `~/.cache/pkgguard`. |
+
 ## Limits
 
 - A package that is old, popular and quietly malicious passes. pkgguard catches the common patterns, not everything; it is one layer, not a sandbox.
 - Private registries: scoped packages that an `.npmrc` maps to another registry (`@corp:registry=...`, read from the project, its parent directories, `~/.npmrc` and `npm_config_*`) are not looked up publicly. An unscoped package, or a PyPI package from a private index, still reports as "does not exist"; approve it yourself.
-- Transitive dependencies aren't checked, only the packages named in the command.
+- Transitive dependencies aren't checked: only packages named in the command or listed directly in a manifest.
+- Requirements files have no lockfile, so a bare `pip install -r` checks every line each time (the cache makes repeats fast).
 
 ## Related
 
@@ -114,6 +156,9 @@ Agent 凭记忆写包名，偶尔会写错，而攻击者会专门抢注这些�
 - 新发布且带安装脚本、刚发布的版本同时换了发布者或丢了构建来源证明（provenance）或新增了安装脚本、已弃用、有已知漏洞、来自 URL / git 或包名运行时才确定（`$PKG`、`xargs`）、连不上 OSV 等 → 警告
 - 只是刚发了新版、其他都没变，或热门包一直以来就带安装脚本 → 只显示说明，不弹确认，避免警告多到被习惯性忽略
 - `.npmrc` 里映射到私有源的 scope（`@corp:registry=...`）不会被误报为“不存在”
+- Agent 把包名写进 `package.json` / `requirements.txt` / `pyproject.toml` 再执行不带参数的 `npm install`、`pip install -r`、`uv sync`，同样会被检查（会跟踪 `cd web &&`），只查锁文件里还没有的依赖
+- `pkgguard scan` 一次检查整个项目的直接依赖；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖
+- 检查结果为 OK 的包缓存 6 小时，重复安装几乎不耗时
 
 **Claude Code 安装（带强制 hook）：**
 
