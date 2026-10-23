@@ -1,4 +1,4 @@
-# top 5000 npm packages by downloads, from wooorm/npm-high-impact, 2026-09-24
+# top 5000 npm packages by downloads, from wooorm/npm-high-impact, 2026-10-23
 semver
 minimatch
 debug

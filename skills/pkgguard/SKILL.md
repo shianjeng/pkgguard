@@ -14,7 +14,9 @@ Run it before any command that installs or executes a package by name:
 - `npm install <pkg>`, `npm i`, `pnpm add`, `yarn add`, `bun add`, `npx <pkg>`, `pnpm dlx`, `bunx`, `deno add npm:<pkg>`
 - `pip install <pkg>`, `python -m pip install`, `uv add`, `uv pip install`, `uvx`, `pipx install`, `poetry add`, `pdm add`
 
-You don't need it for `npm install`, `npm ci`, `pip install -r requirements.txt` or `uv sync` with no new package names: those install what the lockfile already pins.
+Also run it before a bare install after you added a dependency to a manifest yourself: `npm install`, `yarn`, `pnpm install`, `pip install -r requirements.txt`, `uv sync`, `poetry install`. Pass the command as is; pkgguard reads the manifest and checks only what the lockfile doesn't pin yet, so this is cheap. You don't need it for `npm ci`.
+
+To check a whole project, run `node scripts/pkgguard.mjs scan <dir>`.
 
 ## How to run it
 

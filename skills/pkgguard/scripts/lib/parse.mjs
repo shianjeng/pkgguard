@@ -419,24 +419,83 @@ function xargsCommand(args) {
   return replace ? command.map((word) => word.split(replace).join('\x01')) : [...command, '\x01'];
 }
 
-function inspect(tokens, found, seen, depth) {
+// Installs that take their package list from a file rather than the command
+// line: `npm install`, `yarn`, `pip install -r requirements.txt`, `uv sync`.
+// Each entry names the manifest; manifests.mjs reads it.
+function manifestInstalls(program, args) {
+  const dirFlag = (names) => flagValues(args, new Set(names))[0] ?? null;
+  if (/^python(\d+(\.\d+)?)?$/.test(program)) {
+    const m = args.indexOf('-m');
+    return m !== -1 && args[m + 1] === 'pip' ? manifestInstalls('pip', args.slice(m + 2)) : [];
+  }
+  if (NODE_PROGRAMS.has(program) && program !== 'deno') {
+    const { sub, rest } = subcommand(args, NODE_VALUE_FLAGS);
+    const bare = !positionals(rest, NODE_VALUE_FLAGS).length;
+    const install =
+      ((program === 'npm' || program === 'cnpm') && NPM_INSTALL.has(sub)) ||
+      (program === 'pnpm' && (sub === undefined || sub === 'install' || sub === 'i')) ||
+      (program === 'yarn' && (sub === undefined || sub === 'install')) ||
+      (program === 'bun' && (sub === 'install' || sub === 'i'));
+    if (!install || !bare) return [];
+    return [{ ecosystem: 'npm', file: 'package.json', dir: dirFlag(['--prefix', '-C', '--dir', '--cwd']) }];
+  }
+  const { sub, rest } = subcommand(args, PY_VALUE_FLAGS);
+  const requirements = (list) => flagValues(list, new Set(['-r', '--requirement'])).map((file) => ({ ecosystem: 'pypi', file, dir: null }));
+  if (/^pip(\d+(\.\d+)?)?$/.test(program)) return sub === 'install' ? requirements(rest) : [];
+  if (program === 'uv') {
+    if (sub === 'pip' && rest[0] === 'install') return requirements(rest.slice(1));
+    if (sub === 'pip' && rest[0] === 'sync') return positionals(rest.slice(1), PY_VALUE_FLAGS).map((file) => ({ ecosystem: 'pypi', file, dir: null }));
+    if (sub === 'sync') return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['--directory', '--project']) }];
+    return [];
+  }
+  if (program === 'poetry' && sub === 'install') return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['-C', '--directory']) }];
+  if (program === 'pdm' && (sub === 'install' || sub === 'sync')) return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['-p', '--project']) }];
+  return [];
+}
+
+// Where the shell will be after `cd target`, or null when it cannot be known.
+function changeDir(dir, args) {
+  const target = args.find((a) => !a.startsWith('-'));
+  if (dir === null || !target || target === '-' || /^[~$]/.test(target) || COMPUTED.test(target)) return null;
+  if (target.startsWith('/')) return target;
+  return dir === '.' ? target : `${dir}/${target}`;
+}
+
+function joinDir(dir, sub) {
+  if (!sub) return dir;
+  if (sub.startsWith('/') || dir === null) return sub.startsWith('/') ? sub : null;
+  return dir === '.' ? sub : `${dir}/${sub}`;
+}
+
+function add(ctx, pkg) {
+  const key = pkg.kind === 'manifest' ? `manifest:${pkg.path}` : `${pkg.ecosystem}:${pkg.kind ?? 'registry'}:${pkg.name}@${pkg.requested ?? ''}`;
+  if (ctx.seen.has(key)) return;
+  ctx.seen.add(key);
+  ctx.found.push(pkg);
+}
+
+function inspect(tokens, ctx, depth) {
   tokens = unwrap(tokens);
   if (!tokens.length) return;
   const program = basename(tokens[0]);
   const args = tokens.slice(1);
 
+  if (program === 'cd' || program === 'pushd') {
+    ctx.dir = changeDir(ctx.dir, args);
+    return;
+  }
   // bash -c "npm i x", bash -lc '...', eval "..."
   if (SHELLS.has(program)) {
     const flag = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
-    if (flag !== -1 && args[flag + 1] !== undefined) collect(args[flag + 1], found, seen, depth + 1);
+    if (flag !== -1 && args[flag + 1] !== undefined) collect(args[flag + 1], ctx, depth + 1);
     return;
   }
   if (program === 'eval') {
-    collect(args.join(' '), found, seen, depth + 1);
+    collect(args.join(' '), ctx, depth + 1);
     return;
   }
   if (program === 'xargs') {
-    inspect(xargsCommand(args), found, seen, depth + 1);
+    inspect(xargsCommand(args), ctx, depth + 1);
     return;
   }
 
@@ -445,25 +504,29 @@ function inspect(tokens, found, seen, depth) {
   const specs = isNode ? detectNode(program, args) : detectPython(program, args);
   for (const spec of specs) {
     const pkg = COMPUTED.test(spec) ? computed(ecosystem, spec) : isNode ? parseNpmSpec(spec) : parsePySpec(spec);
-    if (!pkg) continue;
-    const key = `${pkg.ecosystem}:${pkg.kind ?? 'registry'}:${pkg.name}@${pkg.requested ?? ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    found.push({ ...pkg, spec });
+    if (pkg) add(ctx, { ...pkg, spec });
+  }
+  for (const manifest of manifestInstalls(program, args)) {
+    if (COMPUTED.test(manifest.file) || COMPUTED.test(manifest.dir ?? '')) continue;
+    const dir = joinDir(ctx.dir, manifest.dir);
+    const path = dir === null ? null : manifest.file.startsWith('/') ? manifest.file : dir === '.' ? manifest.file : `${dir}/${manifest.file}`;
+    add(ctx, { ecosystem: manifest.ecosystem, kind: 'manifest', name: path ?? manifest.file, path, spec: tokens.join(' ') });
   }
 }
 
-function collect(command, found, seen, depth) {
+function collect(command, ctx, depth) {
   if (depth > MAX_DEPTH) return;
   const { segments, nested } = scan(command);
-  for (const inner of nested) collect(inner, found, seen, depth + 1);
-  for (const segment of segments) inspect(segment, found, seen, depth);
+  for (const inner of nested) collect(inner, { ...ctx, dir: ctx.dir }, depth + 1);
+  for (const segment of segments) inspect(segment, ctx, depth);
 }
 
+// Packages a command installs or runs. Entries with kind "manifest" stand for a
+// file (relative to the directory the command starts in) that lists them.
 export function findInstalls(command) {
-  const found = [];
-  collect(String(command ?? ''), found, new Set(), 0);
-  return found;
+  const ctx = { found: [], seen: new Set(), dir: '.' };
+  collect(String(command ?? ''), ctx, 0);
+  return ctx.found;
 }
 
 // Cheap pre-check so the hook can skip the vast majority of shell commands.

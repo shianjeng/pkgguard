@@ -26,13 +26,17 @@ try {
   const command = input?.tool_input?.command;
   if (input?.tool_name === 'Bash' && typeof command === 'string' && MAYBE_INSTALL.test(command)) {
     const { findInstalls } = await import('./lib/parse.mjs');
-    const packages = findInstalls(command);
-    if (packages.length) {
+    const { expandInstalls } = await import('./lib/manifests.mjs');
+    const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
+    // A bare `npm install` or `pip install -r` brings in whatever the manifest lists.
+    const { packages, notes } = expandInstalls(findInstalls(command), cwd);
+    if (packages.length || notes.length) {
+      const { openCache } = await import('./lib/cache.mjs');
       const { checkAll } = await import('./lib/check.mjs');
       const { overall, renderResults } = await import('./lib/report.mjs');
-      const results = await checkAll(packages, { cwd: typeof input.cwd === 'string' ? input.cwd : process.cwd() });
-      const verdict = overall(results);
-      const text = renderResults(results);
+      const results = await checkAll(packages, { cwd, cache: openCache() });
+      const verdict = overall(results, notes);
+      const text = renderResults(results, { notes });
       if (verdict === 'block') {
         decide('deny', text);
       } else if (verdict === 'warn') {

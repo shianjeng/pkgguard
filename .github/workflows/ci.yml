@@ -35,3 +35,31 @@ jobs:
           set +e
           node skills/pkgguard/scripts/pkgguard.mjs npm:crossenv npm:expresss
           test $? -eq 2
+
+  action:
+    # Runs this repository's action the way a user's workflow would.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: A clean project passes
+        id: ok
+        uses: ./
+        with:
+          path: test/fixtures/action-ok
+      - name: A typosquat fails the step
+        id: bad
+        uses: ./
+        continue-on-error: true
+        with:
+          path: test/fixtures/action-bad
+      - name: Check the outcomes
+        env:
+          OK: ${{ steps.ok.outputs.verdict }}
+          BAD: ${{ steps.bad.outputs.verdict }}
+          BAD_OUTCOME: ${{ steps.bad.outcome }}
+        run: |
+          echo "ok=$OK bad=$BAD bad_outcome=$BAD_OUTCOME"
+          test "$OK" = ok && test "$BAD" = block && test "$BAD_OUTCOME" = failure
