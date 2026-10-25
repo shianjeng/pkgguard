@@ -58,8 +58,30 @@ test('npm: yarn, pnpm and bun lockfiles, found in a workspace root', (t) => {
   });
   assert.deepEqual(names(expandManifest(path.join(pnpm, 'package.json'), 'npm').packages), ['registry:expresss@1']);
 
-  const bun = project(t, { 'package.json': { dependencies: { lodash: '4', expresss: '1' } }, 'bun.lock': '{ "packages": { "lodash": ["lodash@4.17.21"] } }' });
+  const bun = project(t, {
+    'package.json': { dependencies: { lodash: '4', expresss: '1' } },
+    // the shape bun 1.3 writes
+    'bun.lock': '{\n  "lockfileVersion": 1,\n  "workspaces": {\n    "": {\n      "name": "t",\n      "dependencies": {\n        "lodash": "4",\n      },\n    },\n  },\n  "packages": {\n    "lodash": ["lodash@4.17.21", "", {}, "sha512-x"],\n  }\n}\n',
+  });
   assert.deepEqual(names(expandManifest(path.join(bun, 'package.json'), 'npm').packages), ['registry:expresss@1']);
+});
+
+test('npm: a range changed since the lockfile was written is checked again, in every lockfile format', (t) => {
+  // Each lockfile records the range a dependency was declared with; package.json now asks for zod ^3.
+  const formats = {
+    'yarn.lock': '"zod@^4.0.0":\n  version "4.1.12"\n',
+    'yarn-berry/yarn.lock': '__metadata:\n  version: 8\n\n"zod@npm:^4.0.0":\n  version: 4.1.12\n',
+    'pnpm-lock.yaml': "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      zod:\n        specifier: ^4.0.0\n        version: 4.1.12\n",
+    'bun.lock': '{\n  "workspaces": {\n    "": {\n      "dependencies": {\n        "zod": "^4.0.0",\n      },\n    },\n  },\n}\n',
+  };
+  for (const [lockfile, content] of Object.entries(formats)) {
+    const where = path.dirname(lockfile) === '.' ? '' : `${path.dirname(lockfile)}/`;
+    const dir = project(t, { [`${where}package.json`]: { dependencies: { zod: '^4.0.0' } }, [lockfile]: content });
+    const file = path.join(dir, `${where}package.json`);
+    assert.deepEqual(names(expandManifest(file, 'npm').packages), [], `${lockfile}: unchanged range is pinned`);
+    fs.writeFileSync(file, JSON.stringify({ dependencies: { zod: '^3.0.0' } }));
+    assert.deepEqual(names(expandManifest(file, 'npm').packages), ['registry:zod@^3.0.0'], `${lockfile}: changed range is checked`);
+  }
 });
 
 test('npm: without a lockfile every dependency is checked', (t) => {
@@ -131,6 +153,30 @@ line-length = 100
     'forked @ https://github.com/u/forked.git',
     'hypothesis',
   ]);
+});
+
+test('pyproject: a specifier changed since uv.lock was written is checked again', (t) => {
+  const uvLock = [
+    '[[package]]',
+    'name = "app"',
+    'source = { virtual = "." }',
+    '',
+    '[package.metadata]',
+    'requires-dist = [',
+    '    { name = "httpx", specifier = "<1,>=0.27" },',
+    '    { name = "rich" },',
+    ']',
+    '',
+    '[[package]]',
+    'name = "httpx"',
+    'version = "0.28.1"',
+    '',
+  ].join('\n');
+  const dir = project(t, { 'pyproject.toml': '[project]\ndependencies = ["httpx >=0.27, <1", "rich"]\n', 'uv.lock': uvLock });
+  const file = path.join(dir, 'pyproject.toml');
+  assert.deepEqual(names(expandManifest(file, 'pypi').packages), [], 'same specifier in a different order and spacing');
+  fs.writeFileSync(file, '[project]\ndependencies = ["httpx>=0.28", "rich>=13"]\n');
+  assert.deepEqual(names(expandManifest(file, 'pypi').packages), ['registry:httpx@>=0.28', 'registry:rich@>=13']);
 });
 
 test('pyproject: packages pinned in uv.lock are skipped', (t) => {

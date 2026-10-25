@@ -66,10 +66,35 @@ function npmLocked(dir) {
       // fall through to the text heuristics
     }
   }
+  // The other lockfiles record the range each dependency was declared with, so
+  // a dependency counts as pinned only while package.json still asks for that
+  // same range. Bumping it to a new range means new code gets downloaded.
+  const base = path.basename(file);
+  if (base === 'yarn.lock') {
+    // v1:   zod@^4.0.0, zod@^4.1.0:      berry:  "zod@npm:^4.0.0":
+    return (name, range) => keyed(text, `${escape(name)}@(npm:)?${escape(range)}`);
+  }
+  if (base === 'pnpm-lock.yaml' && /^\s+specifier:/m.test(text)) {
+    //   zod:
+    //     specifier: ^4.0.0
+    return (name, range) =>
+      new RegExp(`^\\s+['"]?${escape(name)}['"]?:\\s*\\n\\s+specifier:\\s*['"]?${escape(range)}['"]?\\s*$`, 'm').test(text);
+  }
+  if (base === 'bun.lock') {
+    // "workspaces": { "": { "dependencies": { "zod": "^4.0.0" } } }
+    return (name, range) => new RegExp(`"${escape(name)}":\\s*"${escape(range)}"`).test(text);
+  }
+  // bun.lockb is binary and old pnpm lockfiles have no specifiers: fall back to the name.
   return (name) => {
     const n = escape(name);
     return new RegExp(`(^|[\\s"'/,(])${n}@|node_modules/${n}["/]|^\\s+['"]?${n}['"]?:\\s*$`, 'm').test(text);
   };
+}
+
+// Whether a yarn.lock entry key (a quoted or bare, comma separated list of
+// name@range descriptors ending in a colon) contains `descriptor`.
+function keyed(text, descriptor) {
+  return new RegExp(`^"?(?:[^\\n]*?,\\s*"?)?${descriptor}"?(?:,|:\\s*$)`, 'm').test(text);
 }
 
 function npmDependencies(file) {
@@ -177,10 +202,34 @@ export function pyprojectRequirements(text) {
   return out;
 }
 
+// Specifier sets compare equal regardless of spacing and order: ">=1, <2" is "<2,>=1".
+function specifierKey(spec) {
+  return (spec ?? '').replace(/\s+/g, '').split(',').filter(Boolean).sort().join(',');
+}
+
 function pyLocked(dir) {
   const file = findUp(dir, PY_LOCKFILES);
   if (!file) return null;
-  const names = new Set([...(read(file) ?? '').matchAll(/^name\s*=\s*"([^"]+)"/gm)].map((m) => normalizePyName(m[1])));
+  const text = read(file) ?? '';
+  // uv.lock records what the project asked for under [package.metadata]:
+  //   requires-dist = [{ name = "httpx", specifier = ">=0.27" }, { name = "rich" }]
+  // so a changed specifier means new code, as with the npm lockfiles.
+  if (path.basename(file) === 'uv.lock' && /^\[package\.metadata\]/m.test(text)) {
+    const declared = new Map();
+    for (const block of text.split(/^\[\[package\]\]/m)) {
+      const metadata = block.split(/^\[package\.metadata\]/m)[1];
+      if (!metadata) continue;
+      for (const m of metadata.matchAll(/\{\s*name\s*=\s*"([^"]+)"([^}]*)\}/g)) {
+        const spec = /specifier\s*=\s*"([^"]*)"/.exec(m[2])?.[1] ?? '';
+        const name = normalizePyName(m[1]);
+        if (!declared.has(name)) declared.set(name, new Set());
+        declared.get(name).add(specifierKey(spec));
+      }
+    }
+    if (declared.size) return (name, requested) => declared.get(name)?.has(specifierKey(requested)) ?? false;
+  }
+  // poetry.lock and pdm.lock keep only a hash of the declared requirements.
+  const names = new Set([...text.matchAll(/^name\s*=\s*"([^"]+)"/gm)].map((m) => normalizePyName(m[1])));
   return (name) => names.has(name);
 }
 
@@ -194,7 +243,7 @@ function expandPython(file, { all }) {
   const packages = [];
   for (const line of lines) {
     const pkg = parsePySpec(line);
-    if (!pkg || (locked && pkg.kind !== 'external' && locked(pkg.name))) continue;
+    if (!pkg || (locked && pkg.kind !== 'external' && locked(pkg.name, pkg.requested))) continue;
     packages.push(pkg);
   }
   return { packages, total: lines.length, lockfile: Boolean(locked) };

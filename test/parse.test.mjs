@@ -48,6 +48,7 @@ test('python family', () => {
   assert.deepEqual(names('uv add httpx && uv pip install rich && uvx ruff check'), ['pypi:httpx', 'pypi:rich', 'pypi:ruff']);
   assert.deepEqual(names('uvx --from black==24.1.0 black .'), ['pypi:black@24.1.0']);
   assert.deepEqual(names('pipx install poetry && poetry add pydantic'), ['pypi:poetry', 'pypi:pydantic']);
+  assert.deepEqual(findInstalls('poetry sync').map((p) => `${p.kind}:${p.path}`), ['manifest:pyproject.toml'], 'Poetry 2 sync');
   assert.deepEqual(names('python script.py install requests'), []);
 });
 

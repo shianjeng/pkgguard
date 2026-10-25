@@ -448,7 +448,7 @@ function manifestInstalls(program, args) {
     if (sub === 'sync') return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['--directory', '--project']) }];
     return [];
   }
-  if (program === 'poetry' && sub === 'install') return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['-C', '--directory']) }];
+  if (program === 'poetry' && (sub === 'install' || sub === 'sync')) return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['-C', '--directory']) }];
   if (program === 'pdm' && (sub === 'install' || sub === 'sync')) return [{ ecosystem: 'pypi', file: 'pyproject.toml', dir: dirFlag(['-p', '--project']) }];
   return [];
 }

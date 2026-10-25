@@ -121,7 +121,7 @@ $ pkgguard --cmd "cd web && npm install"
     - Looks like the popular package "express" (one character off), but has only 329 downloads last week. Possible typosquat.
 ```
 
-Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), `pip install -r` and `uv pip install -r`/`uv pip sync` (nested `-r` files included), and `uv sync`, `poetry install`, `pdm install` (lockfiles: `uv.lock`, `poetry.lock`, `pdm.lock`). Dependencies already in the lockfile were installed before and are skipped, so a routine `npm install` costs nothing; a version range the locked version no longer satisfies is checked again. At most 50 packages are checked per command; the rest are reported, and `pkgguard scan` checks them all.
+Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), `pip install -r` and `uv pip install -r`/`uv pip sync` (nested `-r` files included), and `uv sync`, `poetry install`, `pdm install` (lockfiles: `uv.lock`, `poetry.lock`, `pdm.lock`). Dependencies already in the lockfile were installed before and are skipped, so a routine `npm install` costs nothing. A dependency whose declared range changed since the lockfile was written (say `zod` from `^4.0.0` to `^3.0.0`) is checked again, because the install will download different code; this works with every npm lockfile and with `uv.lock`. At most 50 packages are checked per command; the rest are reported, and `pkgguard scan` checks them all.
 
 ### Configuration
 
@@ -137,6 +137,7 @@ Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnp
 - Private registries: scoped packages that an `.npmrc` maps to another registry (`@corp:registry=...`, read from the project, its parent directories, `~/.npmrc` and `npm_config_*`) are not looked up publicly. An unscoped package, or a PyPI package from a private index, still reports as "does not exist"; approve it yourself.
 - Transitive dependencies aren't checked: only packages named in the command or listed directly in a manifest.
 - Requirements files have no lockfile, so a bare `pip install -r` checks every line each time (the cache makes repeats fast).
+- `poetry.lock` and `pdm.lock` store only a hash of the declared requirements, so for them a dependency already in the lockfile is skipped even if its declared range changed.
 
 ## Related
 
