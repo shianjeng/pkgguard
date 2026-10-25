@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Registry and OSV response formats change without notice, and unit tests
+    # use fixtures, so only a live run catches it. Weekly, Monday 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   test:
