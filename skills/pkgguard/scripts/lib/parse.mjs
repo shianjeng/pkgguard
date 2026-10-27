@@ -312,6 +312,8 @@ export function parsePySpec(spec) {
   };
 }
 
+// `npm ci` and its aliases install exactly what the lockfile pins.
+const NPM_CLEAN_INSTALL = new Set(['ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean']);
 const NPM_INSTALL = new Set(['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add']);
 const one = (value) => (value ? [value] : []);
 
@@ -432,7 +434,7 @@ function manifestInstalls(program, args) {
     const { sub, rest } = subcommand(args, NODE_VALUE_FLAGS);
     const bare = !positionals(rest, NODE_VALUE_FLAGS).length;
     const install =
-      ((program === 'npm' || program === 'cnpm') && NPM_INSTALL.has(sub)) ||
+      ((program === 'npm' || program === 'cnpm') && (NPM_INSTALL.has(sub) || NPM_CLEAN_INSTALL.has(sub))) ||
       (program === 'pnpm' && (sub === undefined || sub === 'install' || sub === 'i')) ||
       (program === 'yarn' && (sub === undefined || sub === 'install')) ||
       (program === 'bun' && (sub === 'install' || sub === 'i'));

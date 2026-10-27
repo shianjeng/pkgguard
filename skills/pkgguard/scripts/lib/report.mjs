@@ -31,10 +31,9 @@ const FOLD_AFTER = 8;
 export function renderResults(results, { command = null, notes = [] } = {}) {
   const lines = [];
   const verdict = overall(results, notes);
-  lines.push(
-    `pkgguard checked ${results.length} package${results.length === 1 ? '' : 's'}${command ? ` from: ${command}` : ''}`,
-    '',
-  );
+  const looked = results.filter((r) => !r.locked).length; // lockfile sweeps report their own totals
+  const counted = looked ? ` checked ${looked} package${looked === 1 ? '' : 's'}` : '';
+  lines.push(`pkgguard${counted}${command ? `${counted ? ' from' : ''}: ${command}` : ''}`, '');
   const quiet = (r) => r.verdict === 'ok' && r.findings.length === 0;
   const fold = results.length > FOLD_AFTER;
   const folded = fold ? results.filter(quiet) : [];

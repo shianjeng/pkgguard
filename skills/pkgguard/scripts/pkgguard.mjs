@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openCache } from './lib/cache.mjs';
 import { checkAll } from './lib/check.mjs';
+import { sweepLockfiles, sweepReport } from './lib/lockfiles.mjs';
 import { expandInstalls, projectManifests } from './lib/manifests.mjs';
 import { findInstalls, parseNpmSpec, parsePySpec } from './lib/parse.mjs';
 import { overall, renderResults } from './lib/report.mjs';
@@ -22,6 +23,9 @@ const USAGE = `Usage:
   scan        check every direct dependency in package.json, pyproject.toml
               and requirements*.txt in dir (default: the current directory)
   --new-only  with scan: only dependencies the lockfile does not pin yet
+  --no-lockfile
+              skip checking every package the lockfile pins (direct and
+              transitive) against OSV malware reports
   --fail-on   warn (default) or block: the lowest verdict that exits non-zero
   --json      print machine-readable results
   --no-cache  re-check packages that came back clean in the last 6 hours
@@ -75,12 +79,14 @@ async function main(argv) {
   const json = flag(args, '--json');
   const noCache = flag(args, '--no-cache');
   const newOnly = flag(args, '--new-only');
+  const noLockfile = flag(args, '--no-lockfile');
   const failOn = option(args, '--fail-on') ?? 'warn';
   if (!['warn', 'block'].includes(failOn)) throw new Error('--fail-on takes "warn" or "block"');
 
   let packages;
   let notes = [];
   let sources = [];
+  let lockfiles = [];
   let command = null;
   let cwd = process.cwd();
 
@@ -89,12 +95,12 @@ async function main(argv) {
     cwd = path.resolve(args[1] ?? '.');
     const manifests = projectManifests(cwd);
     if (!manifests.length) throw new Error(`no package.json, pyproject.toml or requirements*.txt in ${cwd}`);
-    ({ packages, notes, sources } = expandInstalls(manifests, cwd, { all: !newOnly, limit: Infinity }));
+    ({ packages, notes, sources, lockfiles } = expandInstalls(manifests, cwd, { all: !newOnly, limit: Infinity }));
     command = `scan ${sources.map((s) => display(path.join(cwd, s.path))).join(', ')}`;
   } else if (args[0] === '--cmd') {
     command = args.slice(1).join(' ');
     if (!command) throw new Error('--cmd needs the install command');
-    ({ packages, notes, sources } = expandInstalls(findInstalls(command), cwd));
+    ({ packages, notes, sources, lockfiles } = expandInstalls(findInstalls(command), cwd));
   } else {
     packages = args.map((arg) => {
       const pkg = parseTarget(arg);
@@ -103,13 +109,20 @@ async function main(argv) {
     });
   }
 
-  if (!packages.length && !notes.length) {
+  if (noLockfile) lockfiles = [];
+  if (!packages.length && !notes.length && !lockfiles.length) {
     if (json) process.stdout.write(`${JSON.stringify({ verdict: 'ok', results: [], sources }, null, 2)}\n`);
     else process.stdout.write(`${nothingToCheck(sources)}\n`);
     return 0;
   }
 
-  const results = await checkAll(packages, { cwd, cache: noCache ? null : openCache() });
+  const [checked, sweeps] = await Promise.all([
+    checkAll(packages, { cwd, cache: noCache ? null : openCache() }),
+    sweepLockfiles(lockfiles),
+  ]);
+  const swept = sweepReport(sweeps, cwd, { mentionVulnerable: args[0] === 'scan' });
+  const results = [...checked, ...swept.results];
+  notes = [...notes, ...swept.notes];
   const verdict = overall(results, notes);
   if (json) process.stdout.write(`${JSON.stringify({ verdict, results, notes, sources }, null, 2)}\n`);
   else process.stdout.write(renderResults(results, { command, notes }));

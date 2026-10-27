@@ -31,6 +31,8 @@ export const PACKAGES = {
 export const VULNS = {
   'npm:crossenv': [{ id: 'GHSA-c2m4-w5hm-vqjw', summary: 'crossenv is malware' }],
   'npm:lodash@4.17.20': [{ id: 'GHSA-35jh-r3h4-6jhm', summary: 'Command injection in lodash' }],
+  // the hijacked release from September 2025, as OSV reports it
+  'npm:debug@4.4.2': [{ id: 'GHSA-4x49-vf9v-38px', summary: 'debug 4.4.2 contains malware' }, { id: 'MAL-2025-46974', summary: 'Malicious code in debug (npm)' }],
 };
 
 function npmDoc(name, p) {
@@ -93,6 +95,15 @@ export function fakeFetch(overrides = {}) {
       const name = decodeURIComponent(u.pathname.split('/')[3]);
       const p = PACKAGES.pypi[name];
       return p ? json({ data: { last_week: p.downloads } }) : json({}, 404);
+    }
+    if (u.host === 'api.osv.dev' && u.pathname === '/v1/querybatch') {
+      const { queries } = JSON.parse(init.body);
+      const results = queries.map((q) => {
+        const eco = q.package.ecosystem === 'npm' ? 'npm' : 'pypi';
+        const vulns = [...(VULNS[`${eco}:${q.package.name}`] ?? []), ...(VULNS[`${eco}:${q.package.name}@${q.version}`] ?? [])];
+        return vulns.length ? { vulns: vulns.map(({ id }) => ({ id, modified: '2026-01-01T00:00:00Z' })) } : {};
+      });
+      return json({ results });
     }
     if (u.host === 'api.osv.dev') {
       const body = JSON.parse(init.body);

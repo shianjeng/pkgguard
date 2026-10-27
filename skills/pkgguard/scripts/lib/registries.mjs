@@ -142,6 +142,25 @@ export async function pypiDownloads(name, options) {
   return data?.data?.last_week ?? 0;
 }
 
+const OSV_BATCH = 1000; // the most queries OSV accepts per querybatch request
+
+// Advisory ids for many exact (ecosystem, name, version) triples, one request
+// per thousand. Returns one array of ids per query, in order. Only ids come
+// back from the batch endpoint, so callers classify by id (MAL- = malware).
+export async function osvBatch(queries, options) {
+  const out = [];
+  for (let i = 0; i < queries.length; i += OSV_BATCH) {
+    const chunk = queries.slice(i, i + OSV_BATCH);
+    const body = {
+      queries: chunk.map(({ ecosystem, name, version }) => ({ package: { name, ecosystem: ecosystem === 'npm' ? 'npm' : 'PyPI' }, version })),
+    };
+    const data = await getJson('https://api.osv.dev/v1/querybatch', { ...options, method: 'POST', body });
+    const results = data?.results ?? [];
+    for (let j = 0; j < chunk.length; j++) out.push((results[j]?.vulns ?? []).map((v) => v.id));
+  }
+  return out;
+}
+
 export async function osvVulns(ecosystem, name, version, options) {
   const body = { package: { name, ecosystem: ecosystem === 'npm' ? 'npm' : 'PyPI' } };
   if (version) body.version = version;

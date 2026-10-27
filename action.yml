@@ -15,6 +15,9 @@ inputs:
   fail-on:
     description: Lowest verdict that fails the step, "block" or "warn".
     default: block
+  lockfile:
+    description: Also check every package the lockfile pins, transitive ones included, against OSV malware reports (one request).
+    default: "true"
 
 outputs:
   verdict:
@@ -30,11 +33,13 @@ runs:
         SCAN_PATH: ${{ inputs.path }}
         NEW_ONLY: ${{ inputs.new-only }}
         FAIL_ON: ${{ inputs.fail-on }}
+        LOCKFILE: ${{ inputs.lockfile }}
         PKGGUARD: ${{ github.action_path }}/skills/pkgguard/scripts/pkgguard.mjs
       run: |
         case "$FAIL_ON" in block|warn) ;; *) echo "::error title=pkgguard::fail-on must be block or warn, got '$FAIL_ON'"; exit 2 ;; esac
         args=(scan "$SCAN_PATH" --no-cache --fail-on warn)
         [ "$NEW_ONLY" = "true" ] && args+=(--new-only)
+        [ "$LOCKFILE" = "false" ] && args+=(--no-lockfile)
 
         set +e
         report="$(node "$PKGGUARD" "${args[@]}")"

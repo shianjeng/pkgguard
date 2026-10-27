@@ -68,7 +68,7 @@ npx @shianjeng/pkgguard scan              # every direct dependency here
 npx @shianjeng/pkgguard scan --new-only   # only what the lockfile doesn't pin yet
 ```
 
-`scan` reads `package.json`, `pyproject.toml` (PEP 621, dependency groups and Poetry) and `requirements*.txt`. Clean packages are folded into one line so the findings stay readable.
+`scan` reads `package.json`, `pyproject.toml` (PEP 621, dependency groups and Poetry) and `requirements*.txt`, and checks every package the lockfile pins against OSV malware reports (see [Hijacked versions anywhere in the lockfile](#hijacked-versions-anywhere-in-the-lockfile); `--no-lockfile` skips that). Clean packages are folded into one line so the findings stay readable.
 
 ### GitHub Action
 
@@ -78,6 +78,7 @@ npx @shianjeng/pkgguard scan --new-only   # only what the lockfile doesn't pin y
   with:
     new-only: true      # check what a pull request adds; drop it to check everything
     # fail-on: warn     # default: block
+    # lockfile: false   # skip the malware check of every locked package
 ```
 
 The step fails on BLOCK (or WARN with `fail-on: warn`), annotates each flagged package, writes the report to the job summary, and sets a `verdict` output.
@@ -131,11 +132,25 @@ Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnp
 | `PKGGUARD_NO_CACHE` | Set to re-check everything. By default clean results are reused for 6 hours, so retried installs are instant; flagged packages are always checked again. |
 | `PKGGUARD_CACHE_DIR` | Where the cache lives. Default: `$XDG_CACHE_HOME/pkgguard` or `~/.cache/pkgguard`. |
 
+### Hijacked versions anywhere in the lockfile
+
+Most hijacked releases reach a project as transitive dependencies: `debug@4.4.2` and `chalk@5.6.1` in September 2025, `@ctrl/tinycolor@4.1.1` in the Shai-Hulud worm. No command names them, and `npm ci` installs whatever the lockfile pins without asking anyone.
+
+So whenever an install follows a lockfile (`npm ci`, a bare `npm install`, `yarn`, `pnpm install`, `bun install`, `uv sync`, `poetry install`) and in every `scan`, pkgguard reads every package and exact version the lockfile pins and sends them to OSV in one batch request (a thousand per request). A version with a malware report (`MAL-` id) blocks the install:
+
+```
+$ pkgguard --cmd "npm ci"
+✗ BLOCK debug@4.4.2 (npm) · from package-lock.json
+    - package-lock.json pins debug@4.4.2, which is reported as malicious (MAL-2025-46974). Installing from this lockfile would run it; replace that version first.
+```
+
+Formats: `package-lock.json` and `npm-shrinkwrap.json` (v1 to v3), `pnpm-lock.yaml` (v5 to v9), `yarn.lock` (classic and Berry), `bun.lock`, `uv.lock`, `poetry.lock` and `pdm.lock`. Git, URL, path and workspace entries are skipped; the binary `bun.lockb` is reported as unreadable. Ordinary vulnerabilities don't block, since that is `npm audit`'s job; `scan` mentions how many locked packages have them.
+
 ## Limits
 
 - A package that is old, popular and quietly malicious passes. pkgguard catches the common patterns, not everything; it is one layer, not a sandbox.
 - Private registries: scoped packages that an `.npmrc` maps to another registry (`@corp:registry=...`, read from the project, its parent directories, `~/.npmrc` and `npm_config_*`) are not looked up publicly. An unscoped package, or a PyPI package from a private index, still reports as "does not exist"; approve it yourself.
-- Transitive dependencies aren't checked: only packages named in the command or listed directly in a manifest.
+- Transitive dependencies are only checked against malware reports. The full set of checks (lookalikes, fresh releases, install scripts) runs on packages named in the command or listed directly in a manifest.
 - Requirements files have no lockfile, so a bare `pip install -r` checks every line each time (the cache makes repeats fast).
 - `poetry.lock` and `pdm.lock` store only a hash of the declared requirements, so for them a dependency already in the lockfile is skipped even if its declared range changed.
 
@@ -158,7 +173,8 @@ Agent 凭记忆写包名，偶尔会写错，而攻击者会专门抢注这些�
 - 只是刚发了新版、其他都没变，或热门包一直以来就带安装脚本 → 只显示说明，不弹确认，避免警告多到被习惯性忽略
 - `.npmrc` 里映射到私有源的 scope（`@corp:registry=...`）不会被误报为“不存在”
 - Agent 把包名写进 `package.json` / `requirements.txt` / `pyproject.toml` 再执行不带参数的 `npm install`、`pip install -r`、`uv sync`，同样会被检查（会跟踪 `cd web &&`），只查锁文件里还没有的依赖
-- `pkgguard scan` 一次检查整个项目的直接依赖；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖
+- 只要安装是按锁文件来的（`npm ci`、不带参数的 `npm install`、`uv sync` 等），锁文件里的每一个包（包括间接依赖）都会一次性和 OSV 恶意包库比对，像 2025 年被劫持的 `debug@4.4.2` 这类版本会被直接拦下
+- `pkgguard scan` 一次检查整个项目的直接依赖和锁文件；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖
 - 检查结果为 OK 的包缓存 6 小时，重复安装几乎不耗时
 
 **Claude Code 安装（带强制 hook）：**
