@@ -29,12 +29,17 @@ try {
     const { expandInstalls } = await import('./lib/manifests.mjs');
     const cwd = typeof input.cwd === 'string' ? input.cwd : process.cwd();
     // A bare `npm install` or `pip install -r` brings in whatever the manifest lists.
-    const { packages, notes } = expandInstalls(findInstalls(command), cwd);
-    if (packages.length || notes.length) {
+    // It also follows the lockfile: `npm ci` installs whatever it pins, transitive dependencies included.
+    const { packages, notes: expandNotes, lockfiles } = expandInstalls(findInstalls(command), cwd);
+    if (packages.length || expandNotes.length || lockfiles.length) {
       const { openCache } = await import('./lib/cache.mjs');
       const { checkAll } = await import('./lib/check.mjs');
+      const { sweepLockfiles, sweepReport } = await import('./lib/lockfiles.mjs');
       const { overall, renderResults } = await import('./lib/report.mjs');
-      const results = await checkAll(packages, { cwd, cache: openCache() });
+      const [checked, sweeps] = await Promise.all([checkAll(packages, { cwd, cache: openCache() }), sweepLockfiles(lockfiles)]);
+      const swept = sweepReport(sweeps, cwd);
+      const results = [...checked, ...swept.results];
+      const notes = [...expandNotes, ...swept.notes];
       const verdict = overall(results, notes);
       const text = renderResults(results, { notes });
       if (verdict === 'block') {

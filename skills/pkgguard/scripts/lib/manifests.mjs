@@ -13,11 +13,11 @@ import { satisfies } from './versions.mjs';
 export const MAX_MANIFEST_PACKAGES = 50;
 
 const NPM_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
-const NPM_LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
-const PY_LOCKFILES = ['uv.lock', 'poetry.lock', 'pdm.lock'];
+export const NPM_LOCKFILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb'];
+export const PY_LOCKFILES = ['uv.lock', 'poetry.lock', 'pdm.lock'];
 const LOCAL_SPEC = /^(file:|link:|workspace:|portal:|patch:|\.{0,2}\/)/;
 
-function read(file) {
+export function read(file) {
   try {
     return fs.readFileSync(file, 'utf8');
   } catch {
@@ -30,7 +30,7 @@ function escape(text) {
 }
 
 // The nearest of `names` in `dir` or its parents (workspaces keep one lockfile at the root).
-function findUp(dir, names, levels = 6) {
+export function findUp(dir, names, levels = 6) {
   for (let d = dir, i = 0; i < levels; i++) {
     for (const name of names) {
       const file = path.join(d, name);
@@ -251,6 +251,13 @@ function expandPython(file, { all }) {
 
 // ---- entry points ----
 
+// The lockfile an install from `manifest` follows, or null (requirements files have none).
+export function lockfileFor(manifest, ecosystem) {
+  const dir = path.dirname(manifest);
+  if (ecosystem === 'npm') return findUp(dir, NPM_LOCKFILES);
+  return path.basename(manifest) === 'pyproject.toml' ? findUp(dir, PY_LOCKFILES) : null;
+}
+
 export function expandManifest(file, ecosystem, options = {}) {
   return ecosystem === 'npm' ? expandNpm(file, options) : expandPython(file, options);
 }
@@ -261,6 +268,7 @@ export function expandInstalls(found, cwd = process.cwd(), { all = false, limit 
   const packages = [];
   const notes = [];
   const sources = [];
+  const lockfiles = new Set();
   const seen = new Set();
   for (const entry of found) {
     if (entry.kind !== 'manifest') {
@@ -275,6 +283,8 @@ export function expandInstalls(found, cwd = process.cwd(), { all = false, limit 
     const { packages: listed, missing, total, lockfile } = expandManifest(file, entry.ecosystem, { all });
     if (missing) continue; // the install itself will fail on a missing or broken file
     sources.push({ path: entry.path, total, toCheck: listed.length, lockfile });
+    const lock = lockfileFor(file, entry.ecosystem);
+    if (lock) lockfiles.add(lock);
     for (const pkg of listed) {
       const key = `${pkg.ecosystem}:${pkg.name}@${pkg.requested ?? ''}`;
       if (seen.has(key)) continue;
@@ -289,9 +299,9 @@ export function expandInstalls(found, cwd = process.cwd(), { all = false, limit 
       level: 'warn',
       text: `${dropped.size} more dependencies from manifest files were not checked. Run "pkgguard scan" to check them all.`,
     });
-    return { packages: packages.filter((p) => !dropped.has(p)), notes, sources };
+    return { packages: packages.filter((p) => !dropped.has(p)), notes, sources, lockfiles: [...lockfiles] };
   }
-  return { packages, notes, sources };
+  return { packages, notes, sources, lockfiles: [...lockfiles] };
 }
 
 // Manifests in a project directory, for `pkgguard scan`.
