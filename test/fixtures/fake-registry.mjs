@@ -25,8 +25,14 @@ export const PACKAGES = {
     requests: { created: 5000, versions: { '2.0.0': 4000, '2.32.3': 300 }, downloads: 200_000_000, repo: true },
     'sketchy-build': { created: 400, versions: { '1.0': 400 }, downloads: 5000, repo: true, sdistOnly: true },
     'wheel-dropper': { created: 900, versions: { '1.0': 300, '1.1': 1 }, downloads: 100_000, repo: true, sdistOnlyVersions: ['1.1'] },
+    // registered, but every file was deleted: the JSON API still answers, with empty releases
+    'empty-project': { created: 400, versions: {}, downloads: 0, repo: false },
+    'requests-utils': { created: 200, versions: { '0.1.0': 200 }, downloads: 40, repo: true },
   },
 };
+
+// registered with no files; the JSON API 404s on these, the simple index does not
+export const PYPI_REGISTERED_NO_JSON = ['reserved-name'];
 
 export const VULNS = {
   'npm:crossenv': [{ id: 'GHSA-c2m4-w5hm-vqjw', summary: 'crossenv is malware' }],
@@ -85,6 +91,11 @@ export function fakeFetch(overrides = {}) {
       const name = decodeURIComponent(u.pathname.split('/last-week/')[1]);
       const p = PACKAGES.npm[name];
       return p ? json({ downloads: p.downloads }) : json({ error: 'not found' }, 404);
+    }
+    if (u.host === 'pypi.org' && u.pathname.startsWith('/simple/')) {
+      // the simple index knows every registered project, files or not
+      const name = decodeURIComponent(u.pathname.split('/')[2]);
+      return PACKAGES.pypi[name] || PYPI_REGISTERED_NO_JSON.includes(name) ? json({ name, files: [] }) : json({ message: 'Not Found' }, 404);
     }
     if (u.host === 'pypi.org') {
       const name = decodeURIComponent(u.pathname.split('/')[2]);

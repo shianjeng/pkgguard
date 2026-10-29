@@ -5,11 +5,11 @@ import { findPep440, resolveRange } from './versions.mjs';
 const TIMEOUT_MS = 8000;
 const USER_AGENT = 'pkgguard (+https://github.com/shianjeng/pkgguard)';
 
-async function getJson(url, { fetchImpl = globalThis.fetch, method = 'GET', body } = {}) {
+async function getJson(url, { fetchImpl = globalThis.fetch, method = 'GET', body, accept = 'application/json' } = {}) {
   const res = await fetchImpl(url, {
     method,
     body: body ? JSON.stringify(body) : undefined,
-    headers: { accept: 'application/json', 'user-agent': USER_AGENT, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { accept, 'user-agent': USER_AGENT, ...(body ? { 'content-type': 'application/json' } : {}) },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (res.status === 404) return null;
@@ -96,7 +96,15 @@ function sdistOnly(files) {
 
 export async function pypiFacts(name, requested, options) {
   const doc = await getJson(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, options);
-  if (!doc) return { exists: false };
+  if (!doc) {
+    // A project can be registered with no files left: the JSON API then 404s,
+    // but the simple index still lists it. Saying "does not exist" would be wrong.
+    let simple = null;
+    try {
+      simple = await getJson(`https://pypi.org/simple/${encodeURIComponent(name)}/`, { ...options, accept: 'application/vnd.pypi.simple.v1+json' });
+    } catch {}
+    return simple ? { exists: true, noFiles: true, name: simple.name ?? name } : { exists: false };
+  }
   const releases = doc.releases ?? {};
   const earliest = (files) =>
     files.reduce((min, f) => {
@@ -107,6 +115,7 @@ export async function pypiFacts(name, requested, options) {
     .filter(([, files]) => files.length)
     .map(([v, files]) => [v, earliest(files)])
     .sort((a, b) => Date.parse(a[1]) - Date.parse(b[1]));
+  if (!released.length) return { exists: true, noFiles: true, name: doc.info.name };
   const match = requested ? findPep440(Object.keys(releases), requested) : null;
   const version = match ?? doc.info.version;
   const files = releases[version] ?? [];

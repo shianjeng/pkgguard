@@ -50,12 +50,13 @@ Scoped packages that your `.npmrc` maps to a private registry (`@corp:registry=.
 
 | Finding | Level |
 | --- | --- |
-| Name doesn't exist on the registry | BLOCK |
+| Name doesn't exist on the registry, or a PyPI project is registered but has no files to install | BLOCK |
 | Reported as malware (OSV / GitHub advisories), or replaced by npm's security placeholder | BLOCK |
 | Requested version doesn't exist | BLOCK |
-| Looks like a popular package (one character off, separators changed, affix added, or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
+| Looks like a popular package (one character off; for four-letter names, two letters swapped or one doubled; separators changed; an affix like `-js` or `py` added; or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
 | First published under 7 days ago and runs an install script | BLOCK |
-| Same lookalike with 1,000–50,000 weekly downloads, or with download counts unavailable | WARN |
+| Same lookalike with 1,000 to 50,000 weekly downloads on npm (10,000 on PyPI), or with download counts unavailable | WARN |
+| A popular name plus a common word (`requests-utils`, `lodash-helper`) with few downloads; honest packages are named like this too, so it never blocks | WARN |
 | First published under 30 days ago | WARN |
 | This version is under 72 hours old **and** something else changed: a different publisher, dropped build provenance, new install scripts, or wheels no longer shipped | WARN |
 | Runs `preinstall` / `install` / `postinstall` scripts, unless the package is widely used and earlier versions ran them too | WARN |

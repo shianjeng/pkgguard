@@ -89,12 +89,13 @@ The npm package is scoped because npm refuses the bare name `pkgguard` as too cl
 
 | Finding | Level |
 | --- | --- |
-| Name doesn't exist on the registry | BLOCK |
+| Name doesn't exist on the registry, or a PyPI project is registered but has no files to install | BLOCK |
 | Reported as malware (OSV / GitHub advisories), or replaced by npm's security placeholder | BLOCK |
 | Requested version doesn't exist | BLOCK |
-| Looks like a popular package (one character off, separators changed, affix added, or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
+| Looks like a popular package (one character off; for four-letter names, two letters swapped or one doubled; separators changed; an affix like `-js` or `py` added; or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
 | First published under 7 days ago and runs an install script | BLOCK |
-| Same lookalike with 1,000–50,000 weekly downloads, or with download counts unavailable | WARN |
+| Same lookalike with 1,000 to 50,000 weekly downloads on npm (10,000 on PyPI), or with download counts unavailable | WARN |
+| A popular name plus a common word (`requests-utils`, `lodash-helper`) with few downloads; honest packages are named like this too, so it never blocks | WARN |
 | First published under 30 days ago | WARN |
 | This version is under 72 hours old **and** something else changed: a different publisher, dropped build provenance, new install scripts, or wheels no longer shipped | WARN |
 | Runs `preinstall` / `install` / `postinstall` scripts, unless the package is widely used and earlier versions ran them too | WARN |
@@ -106,7 +107,7 @@ The npm package is scoped because npm refuses the bare name `pkgguard` as too cl
 
 It understands `npm`/`pnpm`/`yarn`/`bun` installs, `npx`/`pnpm dlx`/`bunx`/`yarn dlx`, Deno `npm:` specifiers, `pip`/`python -m pip`, `uv add`/`uv pip install`/`uvx`, `pipx`, `poetry`, `pdm` and `rye`. It reads through chained commands, `bash -c`/`sh -c`, `eval`, `$(...)` and backquotes, `sudo`, env assignments and global options (`npm -g install`, `pnpm -C dir add`), and ignores redirection targets and here-document bodies. Version ranges are resolved the way npm resolves them (`react@^17` is checked as 17.0.2), and PyPI versions are compared the way pip compares them (`==2.0` matches 2.0.0). Local paths and `npm ci` are skipped. URLs, git sources, and names that only exist at run time (`npm i $PKG`, `xargs npm i`) can't be checked, so they WARN instead of passing silently.
 
-Lookalikes are compared against the 5,000 most downloaded packages on each registry. Popular packages are never flagged, and a lookalike with more than 50,000 weekly downloads is assumed to be its own project (`preact` is not a typo of `react`). A name inside a known scope is never a lookalike, because only the scope's owner can publish there; a look-alike scope is.
+Lookalikes are compared against the 5,000 most downloaded packages on each registry. Popular packages are never flagged, and a lookalike with more than 50,000 weekly downloads on npm, or 10,000 on PyPI, where counts run about ten times lower, is assumed to be its own project (`preact` is not a typo of `react`). Names under five letters only match on swapped or doubled letters: any other single edit between short names is usually just another real package (`gsap` and `asap`, `mqtt` and `mitt`). A name inside a known scope is never a lookalike, because only the scope's owner can publish there; a look-alike scope is.
 
 Warnings are kept for things worth stopping for. A release a day old from the usual publisher, with the usual provenance and no new install scripts, is a note rather than a prompt: packages like `@types/*` publish constantly, and a prompt that always appears gets clicked through. Install scripts on widely used packages that have always had them (esbuild, sharp) are notes for the same reason. Every note is still printed.
 

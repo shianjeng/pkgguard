@@ -1,6 +1,6 @@
 {
   "name": "pkgguard",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Stops coding agents from installing hallucinated, typosquatted, malicious or freshly hijacked npm and PyPI packages.",
   "author": {
     "name": "Hank Zhu",
