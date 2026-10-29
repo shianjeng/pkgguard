@@ -10,7 +10,10 @@ export const LIMITS = {
   brandNewDays: 7, // ...and this recent is "brand new"
   freshReleaseHours: 72, // a version this recent has had little time to be vetted
   fewDownloads: 100, // weekly downloads below this are "very few"
-  lookalikeSafeDownloads: 50_000, // a lookalike this popular is probably legitimate
+  // A lookalike this popular is probably its own project. PyPI counts run about
+  // ten times lower than npm's: its 10,000th most downloaded project gets
+  // ~29k a week, so one npm-sized bar warned on 2% of the top 15,000.
+  lookalikeSafeDownloads: { npm: 50_000, pypi: 10_000 },
   lookalikeBlockDownloads: 1_000, // a lookalike this unpopular is probably a typosquat
   establishedDownloads: 50_000, // install scripts on a package this popular are expected, not alarming
 };
@@ -107,6 +110,16 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
     return result(pkg, findings, { facts: { exists: false, downloads }, suggestion: similar?.name ?? null });
   }
 
+  if (facts.noFiles) {
+    add(
+      'block',
+      'no-files',
+      `"${name}" is registered on ${registry} but has no files, so there is nothing to install. The name may be hallucinated.` +
+        (similar ? ` Did you mean "${similar.name}"?` : ''),
+    );
+    return result(pkg, findings, { facts: { exists: true, noFiles: true, downloads }, suggestion: similar?.name ?? null });
+  }
+
   if (facts.securityHolder) {
     add('block', 'removed', `${registry} replaced this package with a security placeholder, which usually means it was malware.`);
   }
@@ -116,15 +129,18 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
     add('warn', 'no-match', `No published version matches "${pkg.requested}", so the install will fail. Checked ${facts.latest} instead.`);
   }
 
-  if (similar && (downloads === null || downloads < LIMITS.lookalikeSafeDownloads)) {
-    const level = downloads !== null && downloads < LIMITS.lookalikeBlockDownloads ? 'block' : 'warn';
+  if (similar && (downloads === null || downloads < LIMITS.lookalikeSafeDownloads[ecosystem])) {
+    // A popular name plus a common word (requests-utils) is also how honest
+    // small packages are named, so that kind of match asks rather than blocks.
+    const level = !similar.weak && downloads !== null && downloads < LIMITS.lookalikeBlockDownloads ? 'block' : 'warn';
     add(
       level,
       'lookalike',
       `Looks like the popular package "${similar.name}" (${similar.reason})` +
         (downloads === null
           ? '. Download counts were unavailable, so a typosquat could not be ruled out.'
-          : `, but has only ${downloads.toLocaleString('en-US')} downloads last week. Possible typosquat.`),
+          : `, but has only ${downloads.toLocaleString('en-US')} downloads last week. ` +
+            (similar.weak ? 'Make sure it is the package you meant.' : 'Possible typosquat.')),
     );
   }
 

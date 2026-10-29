@@ -170,6 +170,34 @@ test('unpublished npm packages are blocked', async () => {
   assert.match(result.findings[0].text, /was unpublished/);
 });
 
+test('a registered PyPI project with no files is blocked, and not called missing', async () => {
+  for (const name of ['empty-project', 'reserved-name']) {
+    const result = await check(`pip install ${name}`);
+    assert.equal(result.verdict, 'block', name);
+    assert.deepEqual(codes(result), ['block:no-files'], name);
+    assert.match(result.findings[0].text, /is registered on PyPI but has no files, so there is nothing to install/);
+  }
+  const missing = await check('pip install truly-not-there');
+  assert.deepEqual(codes(missing), ['block:missing']);
+});
+
+test('the bar above which a lookalike counts as its own project depends on the registry', async () => {
+  // 20,000 downloads a week is a small npm package but a well-used PyPI one
+  const fetchImpl = fakeFetch({
+    'pypistats.org': () => new Response(JSON.stringify({ data: { last_week: 20_000 } }), { status: 200 }),
+  });
+  const pypi = await check('pip install requests-utils', fetchImpl);
+  assert.ok(!codes(pypi).some((c) => c.endsWith(':lookalike')), 'PyPI: 20k a week is above the bar');
+});
+
+test('popular name plus a common word only warns, even with very few downloads', async () => {
+  const result = await check('pip install requests-utils');
+  assert.equal(result.verdict, 'warn');
+  const finding = result.findings.find((f) => f.code === 'lookalike');
+  assert.equal(finding.level, 'warn');
+  assert.match(finding.text, /"requests" \(the name with "utils" added\), but has only 40 downloads last week\. Make sure it is the package you meant\./);
+});
+
 test('sdist-only python packages warn about build code', async () => {
   const result = await check('pip install sketchy-build');
   assert.equal(result.verdict, 'warn');
@@ -202,6 +230,13 @@ test('lookalike detection', () => {
   assert.equal(lookalike('npm', '@typescript_eslint/parser')?.name, '@typescript-eslint/parser');
   assert.equal(lookalike('npm', '@bable/core')?.name, '@babel/core');
   assert.equal(lookalike('npm', '@types/nodee'), null, 'only DefinitelyTyped can publish under @types');
+  // four-letter names: only swapped neighbours and doubled letters, other single edits are real neighbours
+  assert.deepEqual(['vtie', 'viet', 'yamll', 'gl0b'].map((n) => lookalike('npm', n)?.reason ?? null), ['two letters swapped', 'two letters swapped', 'a letter doubled', null]);
+  assert.equal(lookalike('npm', 'gsap'), null, 'gsap is not a typo of asap');
+  // weak suffix matches lose to a strong match anywhere in the list
+  assert.deepEqual(lookalike('pypi', 'requests-utils'), { name: 'requests', rank: lookalike('pypi', 'requests-utils').rank, reason: 'the name with "utils" added', weak: true });
+  assert.equal(lookalike('npm', 'lodash-utils')?.weak, true);
+  assert.equal(lookalike('npm', 'my-own-utils'), null);
   assert.equal(lookalike('npm', 'my-company-internal-tool'), null);
 });
 
