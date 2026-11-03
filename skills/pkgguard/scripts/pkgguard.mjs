@@ -208,8 +208,12 @@ async function uninstallCommand(args) {
   }
   if (targets.length === TARGETS.length) {
     fs.rmSync(ctx.loc.base, { recursive: true, force: true });
-    say(`  Removed ${ctx.show(ctx.loc.base)}. Backups (*.pkgguard-backup) were left where they are.`);
+    say(`  Removed ${ctx.show(ctx.loc.base)}.`);
   }
+  // Restored files lose their backup; one remains only where the file was edited after init.
+  const kept = TARGETS.flatMap((t) => [t.file?.(ctx)]).concat([path.join(ctx.home, '.zshrc'), path.join(ctx.home, '.bashrc')])
+    .filter((f) => f && fs.existsSync(`${f}.pkgguard-backup`));
+  for (const file of kept) say(`  Kept ${ctx.show(`${file}.pkgguard-backup`)}: ${ctx.show(file)} changed after init, so it was not overwritten.`);
   return 0;
 }
 

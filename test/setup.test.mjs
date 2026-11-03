@@ -25,18 +25,22 @@ function sandbox(t, files = {}) {
 }
 
 // A stand-in for the claude CLI that remembers what it was asked to do.
-function fakeClaude() {
+function fakeClaude({ marketplace = false } = {}) {
   const calls = [];
   let installed = false;
+  let listed = marketplace;
   const run = (cmd, args) => {
     calls.push(`${cmd} ${args.join(' ')}`);
     const line = args.join(' ');
     if (line === 'plugin list') return { status: 0, stdout: installed ? 'pkgguard@pkgguard\n' : 'No plugins installed.\n', stderr: '' };
+    if (line === 'plugin marketplace list') return { status: 0, stdout: `claude-plugins-official\n${listed ? 'pkgguard\n' : ''}`, stderr: '' };
+    if (line === 'plugin marketplace add shianjeng/pkgguard') listed = true;
+    if (line === 'plugin marketplace remove pkgguard') listed = false;
     if (line === 'plugin install pkgguard@pkgguard') installed = true;
     if (line === 'plugin uninstall pkgguard@pkgguard') installed = false;
     return { status: 0, stdout: '', stderr: '' };
   };
-  return { run, calls };
+  return { run, calls, marketplaceListed: () => listed };
 }
 
 function ctxFor(home, { shell = '/bin/zsh', withClaude = true, run } = {}) {
@@ -113,6 +117,9 @@ test('uninstall restores the original files and removes the ones init created', 
   for (const t of TARGETS) t.install(ctx);
   for (const t of TARGETS) assert.equal(t.uninstall(ctx).changed, true, t.id);
   assert.deepEqual(readJson(path.join(home, '.cursor/hooks.json')), files['.cursor/hooks.json']);
+  for (const file of ['.cursor/hooks.json', '.gemini/settings.json', '.zshrc']) {
+    assert.ok(!fs.existsSync(path.join(home, `${file}.pkgguard-backup`)), `${file}: restored, so its backup is gone`);
+  }
   assert.deepEqual(readJson(path.join(home, '.gemini/settings.json')), files['.gemini/settings.json']);
   assert.equal(fs.readFileSync(path.join(home, '.zshrc'), 'utf8'), files['.zshrc']);
   assert.ok(!fs.existsSync(path.join(home, '.codex/hooks.json')), 'created by init, empty again, so removed');
@@ -312,4 +319,51 @@ test('init does not take end of input for a yes', (t) => {
   assert.match(r.stderr, /no terminal to confirm on; run again with --yes/);
   assert.ok(!fs.existsSync(path.join(home, '.cursor/hooks.json')));
   assert.ok(!fs.existsSync(path.join(home, '.pkgguard')));
+});
+
+test('uninstall gives back the exact bytes, and init keeps the file formatting', (t) => {
+  // four-space indent and no final newline, as some editors write it
+  const original = '{\n    "theme": "dark",\n    "ui": {\n        "compact": true\n    }\n}';
+  const home = sandbox(t, { '.gemini/settings.json': original });
+  const ctx = ctxFor(home);
+  installApp(ctx);
+  target('gemini').install(ctx);
+  const installed = fs.readFileSync(path.join(home, '.gemini/settings.json'), 'utf8');
+  assert.ok(installed.startsWith('{\n    "theme": "dark",'), 'same indent as before');
+  assert.ok(!installed.endsWith('\n'), 'no final newline added');
+  target('gemini').uninstall(ctx);
+  assert.equal(fs.readFileSync(path.join(home, '.gemini/settings.json'), 'utf8'), original);
+  assert.ok(!fs.existsSync(path.join(home, '.gemini/settings.json.pkgguard-backup')));
+});
+
+test('a file edited after init keeps the edits, and its backup stays', (t) => {
+  const home = sandbox(t, { '.zshrc': 'export A=1\n' });
+  const ctx = ctxFor(home);
+  installApp(ctx);
+  target('shell').install(ctx);
+  fs.appendFileSync(path.join(home, '.zshrc'), 'export B=2\n');
+  target('shell').uninstall(ctx);
+  const rc = fs.readFileSync(path.join(home, '.zshrc'), 'utf8');
+  assert.doesNotMatch(rc, /pkgguard/);
+  assert.match(rc, /export A=1\n/);
+  assert.match(rc, /export B=2\n/);
+  assert.ok(fs.existsSync(path.join(home, '.zshrc.pkgguard-backup')));
+});
+
+test('uninstall removes the Claude marketplace only if init added it', (t) => {
+  const home = sandbox(t, { '.claude/.keep': '' });
+  const added = fakeClaude();
+  const ctx = ctxFor(home, { run: added.run });
+  target('claude').install(ctx);
+  assert.equal(added.marketplaceListed(), true);
+  target('claude').uninstall(ctx);
+  assert.equal(added.marketplaceListed(), false, 'init added it, so it goes');
+
+  const home2 = sandbox(t, { '.claude/.keep': '' });
+  const theirs = fakeClaude({ marketplace: true });
+  const ctx2 = ctxFor(home2, { run: theirs.run });
+  target('claude').install(ctx2);
+  target('claude').uninstall(ctx2);
+  assert.equal(theirs.marketplaceListed(), true, 'the user had it before, so it stays');
+  assert.ok(!theirs.calls.includes('claude plugin marketplace remove pkgguard'));
 });

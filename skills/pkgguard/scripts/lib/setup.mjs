@@ -56,20 +56,50 @@ function writeFile(file, text) {
   fs.writeFileSync(file, text);
 }
 
-// After removing pkgguard: a file pkgguard created (no backup exists, so it
-// was not there before) and that is now empty goes away again.
-function writeOrRemove(file, text, empty) {
-  if (empty && !fs.existsSync(`${file}.pkgguard-backup`)) fs.rmSync(file, { force: true });
-  else writeFile(file, text);
+// After removing pkgguard, put a file back as it was. One pkgguard created
+// (no backup, so it was not there before) and that is now empty goes away;
+// one whose content now matches its backup gets the backup's exact bytes
+// back, and the backup goes. A file the user edited since keeps the edits,
+// and its backup stays.
+function restore(file, text, { empty, same }) {
+  const backup = `${file}.pkgguard-backup`;
+  if (!fs.existsSync(backup)) {
+    if (empty) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, text);
+    return;
+  }
+  if (same(fs.readFileSync(backup, 'utf8'))) {
+    fs.copyFileSync(backup, file);
+    fs.rmSync(backup);
+    return;
+  }
+  fs.writeFileSync(file, text);
+}
+
+// Writes JSON the way the file already was: same indent, same final newline,
+// so a person diffing their config sees only pkgguard's lines.
+function jsonText(data, original) {
+  const indent = /^\{\r?\n([ \t]+)"/.exec(original ?? '')?.[1] ?? '  ';
+  const newline = original === undefined || original === '' || original.endsWith('\n') ? '\n' : '';
+  return `${JSON.stringify(data, null, indent)}${newline}`;
+}
+
+function sameJson(a, b) {
+  try {
+    return JSON.stringify(JSON.parse(a)) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 // Applies `mutate` to a JSON file. Returns { changed } or { error } when the
 // file exists but is not plain JSON (a comment, a trailing comma), in which
 // case nothing is written.
-function editJson(file, mutate, { dryRun = false } = {}) {
+function editJson(file, mutate, { dryRun = false, removing = false } = {}) {
   let data = {};
+  let text;
   if (fs.existsSync(file)) {
-    const text = fs.readFileSync(file, 'utf8');
+    text = fs.readFileSync(file, 'utf8');
     if (text.trim()) {
       try {
         data = JSON.parse(text);
@@ -82,8 +112,13 @@ function editJson(file, mutate, { dryRun = false } = {}) {
   const before = JSON.stringify(data);
   mutate(data);
   if (JSON.stringify(data) === before) return { changed: false };
-  // Cursor's hooks.json keeps a "version" key; with nothing else left it is empty too.
-  if (!dryRun) writeOrRemove(file, `${JSON.stringify(data, null, 2)}\n`, !Object.keys(data).filter((k) => k !== 'version').length);
+  if (dryRun) return { changed: true };
+  if (removing) {
+    // Cursor's hooks.json keeps a "version" key; with nothing else left it is empty too.
+    restore(file, jsonText(data, text), { empty: !Object.keys(data).filter((k) => k !== 'version').length, same: (old) => sameJson(old, data) });
+  } else {
+    writeFile(file, jsonText(data, text));
+  }
   return { changed: true };
 }
 
@@ -137,6 +172,8 @@ export const TARGETS = [
       if (!/\bpkgguard\b/.test(markets.stdout)) {
         const added = ctx.run('claude', ['plugin', 'marketplace', 'add', MARKETPLACE]);
         if (added.status !== 0) return { error: `claude plugin marketplace add failed: ${added.stderr.trim() || added.stdout.trim()}` };
+        // A marketplace the user had added themselves stays on uninstall; this one goes.
+        saveState(ctx, { claudeMarketplaceAdded: true });
       }
       const installed = ctx.run('claude', ['plugin', 'install', PLUGIN]);
       if (installed.status !== 0) return { error: `claude plugin install failed: ${installed.stderr.trim() || installed.stdout.trim()}` };
@@ -145,10 +182,21 @@ export const TARGETS = [
     configured: (ctx) => (ctx.which('claude') ? /\bpkgguard\b/.test(ctx.run('claude', ['plugin', 'list']).stdout) : null),
     uninstall(ctx) {
       if (!ctx.which('claude')) return { changed: false };
-      if (!/\bpkgguard\b/.test(ctx.run('claude', ['plugin', 'list']).stdout)) return { changed: false };
-      if (ctx.dryRun) return { changed: true };
-      const removed = ctx.run('claude', ['plugin', 'uninstall', PLUGIN]);
-      return removed.status === 0 ? { changed: true } : { error: `claude plugin uninstall failed: ${removed.stderr.trim()}` };
+      let changed = false;
+      if (/\bpkgguard\b/.test(ctx.run('claude', ['plugin', 'list']).stdout)) {
+        if (ctx.dryRun) return { changed: true };
+        const removed = ctx.run('claude', ['plugin', 'uninstall', PLUGIN]);
+        if (removed.status !== 0) return { error: `claude plugin uninstall failed: ${removed.stderr.trim()}` };
+        changed = true;
+      }
+      if (loadState(ctx).claudeMarketplaceAdded && /\bpkgguard\b/.test(ctx.run('claude', ['plugin', 'marketplace', 'list']).stdout)) {
+        if (ctx.dryRun) return { changed: true };
+        const removed = ctx.run('claude', ['plugin', 'marketplace', 'remove', 'pkgguard']);
+        if (removed.status !== 0) return { error: `claude plugin marketplace remove failed: ${removed.stderr.trim()}` };
+        saveState(ctx, { claudeMarketplaceAdded: false });
+        changed = true;
+      }
+      return { changed };
     },
     selfTest: { agent: 'claude', input: (command, cwd) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd }) },
   },
@@ -172,7 +220,7 @@ export const TARGETS = [
     },
     configured: (ctx) => jsonHas(path.join(ctx.home, '.cursor', 'hooks.json'), (d) => d.hooks?.beforeShellExecution, false),
     uninstall(ctx) {
-      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'beforeShellExecution'], false), ctx);
+      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'beforeShellExecution'], false), { ...ctx, removing: true });
     },
     selfTest: { agent: 'cursor', input: (command, cwd) => ({ hook_event_name: 'beforeShellExecution', command, cwd }) },
     next: 'Restart Cursor so it loads the new hook.',
@@ -199,7 +247,7 @@ export const TARGETS = [
     },
     configured: (ctx) => jsonHas(path.join(ctx.home, '.codex', 'hooks.json'), (d) => d.hooks?.PreToolUse, true),
     uninstall(ctx) {
-      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'PreToolUse'], true), ctx);
+      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'PreToolUse'], true), { ...ctx, removing: true });
     },
     selfTest: { agent: 'codex', input: (command, cwd) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd }) },
     next: 'In Codex, run /hooks and trust the pkgguard hook; Codex does not run new hooks until you do.',
@@ -226,7 +274,7 @@ export const TARGETS = [
     },
     configured: (ctx) => jsonHas(path.join(ctx.home, '.gemini', 'settings.json'), (d) => d.hooks?.BeforeTool, true),
     uninstall(ctx) {
-      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'BeforeTool'], true), ctx);
+      return editJson(this.file(ctx), (data) => prune(data, ['hooks', 'BeforeTool'], true), { ...ctx, removing: true });
     },
     selfTest: { agent: 'gemini', input: (command, cwd) => ({ hook_event_name: 'BeforeTool', tool_name: 'run_shell_command', tool_input: { command }, cwd }) },
   },
@@ -279,7 +327,7 @@ export const TARGETS = [
           changed = true;
         } else if (text.includes(BLOCK_START)) {
           const rest = withoutRcBlock(text);
-          if (!ctx.dryRun) writeOrRemove(rc, rest, !rest.trim());
+          if (!ctx.dryRun) restore(rc, rest, { empty: !rest.trim(), same: (old) => old === rest });
           changed = true;
         }
       }
@@ -354,6 +402,20 @@ export function installApp(ctx, source = SKILL_ROOT) {
   fs.renameSync(staging, ctx.loc.app);
   fs.rmSync(old, { recursive: true, force: true });
   return { changed: true };
+}
+
+// What init did that uninstall needs to know, kept next to the app copy.
+function loadState(ctx) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ctx.loc.base, 'state.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveState(ctx, change) {
+  fs.mkdirSync(ctx.loc.base, { recursive: true });
+  fs.writeFileSync(path.join(ctx.loc.base, 'state.json'), `${JSON.stringify({ ...loadState(ctx), ...change }, null, 2)}\n`);
 }
 
 export function installedVersion(ctx) {

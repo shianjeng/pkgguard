@@ -47,7 +47,7 @@ npx @shianjeng/pkgguard uninstall  # takes it all out again
 | Gemini CLI | a `BeforeTool` hook in `~/.gemini/settings.json` | denied | denied (Gemini ignores "ask") |
 | zsh, bash or fish | wrappers for `npm`, `npx`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `pipx`, `poetry`, `pdm` | not installed | asks you `[y/N]` |
 
-It copies the checking code to `~/.pkgguard`, so hooks keep working after npx clears its cache. It backs up each file before its first change (`<file>.pkgguard-backup`), adds or removes only pkgguard's own entries, leaves a file alone if it isn't plain JSON, and can be run again to update. `--dry-run` shows the plan without touching anything; `--only cursor,shell` limits it.
+It copies the checking code to `~/.pkgguard`, so hooks keep working after npx clears its cache. It backs up each file before its first change (`<file>.pkgguard-backup`), keeps the file's indentation, adds or removes only pkgguard's own entries, leaves a file alone if it isn't plain JSON, and can be run again to update. `uninstall` puts every file back byte for byte, deletes the ones init created and the backups, and removes the Claude marketplace if init added it; a file you edited after init keeps your edits, and its backup stays. `--dry-run` shows the plan without touching anything; `--only cursor,shell` limits it.
 
 Two things init cannot do for you: Codex runs new hooks only after you trust them with `/hooks`, and Cursor loads hooks when it starts, so restart it.
 
