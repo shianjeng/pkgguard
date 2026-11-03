@@ -156,18 +156,25 @@ const OSV_BATCH = 1000; // the most queries OSV accepts per querybatch request
 // Advisory ids for many exact (ecosystem, name, version) triples, one request
 // per thousand. Returns one array of ids per query, in order. Only ids come
 // back from the batch endpoint, so callers classify by id (MAL- = malware).
+const OSV_PARALLEL = 4; // a batch takes about two seconds; a 10,000-package lockfile in sequence would near the hook's 30 s
+
 export async function osvBatch(queries, options) {
-  const out = [];
-  for (let i = 0; i < queries.length; i += OSV_BATCH) {
-    const chunk = queries.slice(i, i + OSV_BATCH);
-    const body = {
-      queries: chunk.map(({ ecosystem, name, version }) => ({ package: { name, ecosystem: ecosystem === 'npm' ? 'npm' : 'PyPI' }, version })),
-    };
-    const data = await getJson('https://api.osv.dev/v1/querybatch', { ...options, method: 'POST', body });
-    const results = data?.results ?? [];
-    for (let j = 0; j < chunk.length; j++) out.push((results[j]?.vulns ?? []).map((v) => v.id));
-  }
-  return out;
+  const chunks = [];
+  for (let i = 0; i < queries.length; i += OSV_BATCH) chunks.push(queries.slice(i, i + OSV_BATCH));
+  const answers = new Array(chunks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const index = next++;
+      const body = {
+        queries: chunks[index].map(({ ecosystem, name, version }) => ({ package: { name, ecosystem: ecosystem === 'npm' ? 'npm' : 'PyPI' }, version })),
+      };
+      const data = await getJson('https://api.osv.dev/v1/querybatch', { ...options, method: 'POST', body });
+      answers[index] = chunks[index].map((_, j) => (data?.results?.[j]?.vulns ?? []).map((v) => v.id));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(OSV_PARALLEL, chunks.length) }, worker));
+  return answers.flat();
 }
 
 export async function osvVulns(ecosystem, name, version, options) {

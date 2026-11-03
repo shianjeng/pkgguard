@@ -9,6 +9,12 @@ export const PACKAGES = {
   npm: {
     lodash: { created: 5000, versions: { '4.17.20': 400, '4.17.21': 300 }, downloads: 50_000_000, repo: true },
     expresss: { created: 3000, versions: { '0.0.0': 3000 }, downloads: 400, repo: false },
+    // the originals, for comparing a lookalike's downloads with theirs
+    express: { created: 5000, versions: { '5.1.0': 100 }, downloads: 60_000_000, repo: true },
+    minimatch: { created: 5000, versions: { '10.0.1': 100 }, downloads: 500_000, repo: true },
+    // lookalikes whose download counts clear the 1,000 bar, as padded ones would
+    expres: { created: 900, versions: { '1.0.0': 900 }, downloads: 3_000, repo: true },
+    minimatc: { created: 900, versions: { '1.0.0': 900 }, downloads: 3_000, repo: true },
     'left-pad': { created: 3500, versions: { '1.3.0': 2500 }, downloads: 2_000_000, repo: true, deprecated: 'use String.prototype.padStart()' },
     'shiny-new-cli': { created: 2, versions: { '0.1.0': 2 }, downloads: 20, repo: true, scripts: { postinstall: 'node setup.js' } },
     chalky: { created: 900, versions: { '5.0.0': 400, '5.0.1': 0.5 }, downloads: 3_000_000, repo: true, provenance: ['5.0.0'], publishers: { '5.0.0': 'sindre', '5.0.1': 'someone-else' } },
