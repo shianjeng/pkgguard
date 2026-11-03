@@ -28,7 +28,23 @@ function headline(result) {
 // (a whole package.json), so the findings that matter stay visible.
 const FOLD_AFTER = 8;
 
-export function renderResults(results, { command = null, notes = [] } = {}) {
+const SGR = { block: '31', warn: '33', ok: '32', info: '32', dim: '2', bold: '1' };
+const paint = (on, code, text) => (on ? `\x1b[${code}m${text}\x1b[0m` : text);
+
+// The closing line differs by reader: an agent gets instructions, a person at
+// a terminal gets what happened and what they can do about it.
+function verdictLine(verdict, audience, command) {
+  if (audience === 'human') {
+    if (verdict === 'block') return `Not installed. If you are sure, run it with PKGGUARD_OFF=1 in front${command ? `: PKGGUARD_OFF=1 ${command}` : ''}`;
+    if (verdict === 'warn') return 'Worth a look before installing.';
+    return 'Nothing suspicious found.';
+  }
+  if (verdict === 'block') return 'Verdict: BLOCK. Do not install. Tell the user what pkgguard found; do not swap in a different package name without their confirmation.';
+  if (verdict === 'warn') return 'Verdict: WARN. Show these findings to the user and get a clear yes before installing.';
+  return 'Verdict: OK. Nothing suspicious found.';
+}
+
+export function renderResults(results, { command = null, notes = [], audience = 'agent', color = false } = {}) {
   const lines = [];
   const verdict = overall(results, notes);
   const looked = results.filter((r) => !r.locked).length; // lockfile sweeps report their own totals
@@ -39,24 +55,18 @@ export function renderResults(results, { command = null, notes = [] } = {}) {
   const folded = fold ? results.filter(quiet) : [];
   for (const r of results) {
     if (fold && quiet(r)) continue;
-    lines.push(`${MARK[r.verdict]} ${LABEL[r.verdict]} ${headline(r)}`);
+    lines.push(`${paint(color, SGR[r.verdict], `${MARK[r.verdict]} ${LABEL[r.verdict]}`)} ${headline(r)}`);
     // Every finding is shown, notes included: a check that could not run must not look like a pass.
-    for (const f of r.findings) lines.push(`    ${f.level === 'info' ? '·' : '-'} ${f.text}`);
+    for (const f of r.findings) lines.push(f.level === 'info' ? paint(color, SGR.dim, `    · ${f.text}`) : `    - ${f.text}`);
   }
   if (folded.length) {
     const names = folded.map((r) => r.name);
     const shown = names.slice(0, 12).join(', ');
-    lines.push(`${MARK.ok} ${LABEL.ok} ${folded.length} more with no findings: ${shown}${names.length > 12 ? `, … (+${names.length - 12})` : ''}`);
+    lines.push(`${paint(color, SGR.ok, `${MARK.ok} ${LABEL.ok}`)} ${folded.length} more with no findings: ${shown}${names.length > 12 ? `, … (+${names.length - 12})` : ''}`);
   }
-  for (const note of notes) lines.push(`${MARK[note.level]} ${LABEL[note.level]} ${note.text}`);
+  for (const note of notes) lines.push(`${paint(color, SGR[note.level], `${MARK[note.level]} ${LABEL[note.level]}`)} ${note.text}`);
   lines.push('');
-  if (verdict === 'block') {
-    lines.push('Verdict: BLOCK. Do not install. Tell the user what pkgguard found; do not swap in a different package name without their confirmation.');
-  } else if (verdict === 'warn') {
-    lines.push('Verdict: WARN. Show these findings to the user and get a clear yes before installing.');
-  } else {
-    lines.push('Verdict: OK. Nothing suspicious found.');
-  }
+  lines.push(paint(color && audience === 'human', SGR.bold, verdictLine(verdict, audience, command)));
   return `${lines.join('\n')}\n`;
 }
 
