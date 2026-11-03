@@ -61,6 +61,17 @@ test('a brand-new package with an install script is blocked', async () => {
   assert.match(result.findings.find((f) => f.code === 'install-script').text, /postinstall: node setup\.js/);
 });
 
+test('padding downloads past 1,000 does not get a lookalike of a huge package past the block', async () => {
+  // 3,000 a week against express's 60 million is 0.005%
+  const squat = await check('npm i expres');
+  assert.equal(squat.verdict, 'block');
+  assert.match(squat.findings.find((f) => f.code === 'lookalike').text, /only 3,000 downloads last week, against 60,000,000 for "express"/);
+  // the same 3,000 against minimatch's 500,000 is 0.6%: worth asking, not blocking
+  const smaller = await check('npm i minimatc');
+  assert.equal(smaller.verdict, 'warn');
+  assert.equal(smaller.findings.find((f) => f.code === 'lookalike').level, 'warn');
+});
+
 test('a fresh release that dropped provenance and changed publisher warns', async () => {
   const result = await check('npm i chalky');
   assert.equal(result.verdict, 'warn');

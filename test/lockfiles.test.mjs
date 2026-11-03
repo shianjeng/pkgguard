@@ -285,6 +285,26 @@ test('large lockfiles are sent in batches of a thousand', async (t) => {
   assert.equal(fetchImpl.calls.length, 3);
 });
 
+test('parallel batches keep every result next to its own package', async (t) => {
+  // the malicious version sits in the third of three batches, and the first batch answers last
+  const packages = { '': {} };
+  for (let i = 0; i < 2500; i++) packages[`node_modules/pkg-${i}`] = { version: '1.0.0' };
+  packages['node_modules/debug'] = { version: '4.4.2' };
+  const root = dir(t, { 'package-lock.json': { packages } });
+  const base = fakeFetch();
+  let first = true;
+  const slowFirst = async (url, init) => {
+    if (first) {
+      first = false;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return base(url, init);
+  };
+  const sweep = await sweepLockfile(path.join(root, 'package-lock.json'), { fetchImpl: slowFirst });
+  assert.equal(sweep.total, 2501);
+  assert.deepEqual(sweep.malicious.map((p) => `${p.name}@${p.version}`), ['debug@4.4.2']);
+});
+
 function runHook(input) {
   return new Promise((resolve) => {
     const child = execFile(

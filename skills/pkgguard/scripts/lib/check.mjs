@@ -15,6 +15,12 @@ export const LIMITS = {
   // ~29k a week, so one npm-sized bar warned on 2% of the top 15,000.
   lookalikeSafeDownloads: { npm: 50_000, pypi: 10_000 },
   lookalikeBlockDownloads: 1_000, // a lookalike this unpopular is probably a typosquat
+  // Download counts are cheap to inflate, so a lookalike that clears the bar
+  // above is still blocked while it has under this share of the downloads of
+  // the package it resembles: a squat of express (~60M a week) needs about
+  // 6,000 fake downloads a week, not 1,000. No legitimate lookalike in the
+  // 15,000 most downloaded packages of either registry falls under it.
+  lookalikeBlockShare: 0.0001,
   establishedDownloads: 50_000, // install scripts on a package this popular are expected, not alarming
 };
 
@@ -132,14 +138,22 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
   if (similar && (downloads === null || downloads < LIMITS.lookalikeSafeDownloads[ecosystem])) {
     // A popular name plus a common word (requests-utils) is also how honest
     // small packages are named, so that kind of match asks rather than blocks.
-    const level = !similar.weak && downloads !== null && downloads < LIMITS.lookalikeBlockDownloads ? 'block' : 'warn';
+    let level = !similar.weak && downloads !== null && downloads < LIMITS.lookalikeBlockDownloads ? 'block' : 'warn';
+    // Between the two bars, compare with the original rather than trust a count anyone can pad.
+    let original = null;
+    if (level === 'warn' && !similar.weak && downloads !== null) {
+      original = await settle(ecosystem === 'npm' ? npmDownloads(similar.name, options) : pypiDownloads(similar.name, options));
+      original = original.error ? null : original.value;
+      if (original && downloads < original * LIMITS.lookalikeBlockShare) level = 'block';
+    }
+    const against = original ? `, against ${original.toLocaleString('en-US')} for "${similar.name}"` : '';
     add(
       level,
       'lookalike',
       `Looks like the popular package "${similar.name}" (${similar.reason})` +
         (downloads === null
           ? '. Download counts were unavailable, so a typosquat could not be ruled out.'
-          : `, but has only ${downloads.toLocaleString('en-US')} downloads last week. ` +
+          : `, but has only ${downloads.toLocaleString('en-US')} downloads last week${against}. ` +
             (similar.weak ? 'Make sure it is the package you meant.' : 'Possible typosquat.')),
     );
   }

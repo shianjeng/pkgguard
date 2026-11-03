@@ -55,6 +55,7 @@ Scoped packages that your `.npmrc` maps to a private registry (`@corp:registry=.
 | Requested version doesn't exist | BLOCK |
 | Looks like a popular package (one character off; for four-letter names, two letters swapped or one doubled; separators changed; an affix like `-js` or `py` added; or a look-alike scope such as `@typescript_eslint`) with under 1,000 weekly downloads | BLOCK |
 | First published under 7 days ago and runs an install script | BLOCK |
+| Same lookalike with more downloads, but under 0.01% of the package it resembles (`expres`: 6,928 a week against 194 million for `express`); download counts are cheap to pad, a share of a huge package's is not | BLOCK |
 | Same lookalike with 1,000 to 50,000 weekly downloads on npm (10,000 on PyPI), or with download counts unavailable | WARN |
 | A popular name plus a common word (`requests-utils`, `lodash-helper`) with few downloads; honest packages are named like this too, so it never blocks | WARN |
 | First published under 30 days ago | WARN |
