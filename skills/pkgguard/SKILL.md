@@ -32,6 +32,8 @@ Or name packages directly:
 node scripts/pkgguard.mjs npm:zod pypi:httpx==0.27.0
 ```
 
+If the user wants pkgguard in every agent and their shell, `node scripts/pkgguard.mjs init` sets that up (it shows the plan and asks first).
+
 It needs Node.js 22 or newer and network access to the npm registry, PyPI, pypistats.org and api.osv.dev. Add `--json` for structured output. Exit code: 0 OK, 1 WARN, 2 BLOCK.
 
 ## What to do with the result

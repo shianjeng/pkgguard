@@ -2,7 +2,13 @@
 
 **Stop your coding agent from installing packages that don't exist, or shouldn't.**
 
-Agents type package names from memory. Sometimes the name is wrong, and attackers register the wrong names on purpose ("slopsquatting"). Sometimes the name is right but the release is hours old and came from a hijacked account. pkgguard checks every package before your agent installs it.
+Agents type package names from memory. Sometimes the name is wrong, and attackers register the wrong names on purpose ("slopsquatting"). Sometimes the name is right but the release is hours old and came from a hijacked account. pkgguard checks every package before your agent installs it, and before you do.
+
+```bash
+npx @shianjeng/pkgguard init
+```
+
+One command sets it up in Claude Code, Cursor, Codex CLI and Gemini CLI, and in your shell, so `npm install` and `pip install` you type yourself are checked too.
 
 ```
 $ npx @shianjeng/pkgguard --cmd "npm i expresss crossenv && pip install colourama numpy"
@@ -22,6 +28,50 @@ Verdict: BLOCK. Do not install. Tell the user what pkgguard found; do not swap i
 ```
 
 ## Install
+
+### Everything at once: `pkgguard init`
+
+```bash
+npx @shianjeng/pkgguard init       # shows what it will change, then asks
+npx @shianjeng/pkgguard doctor     # proves each place blocks a typosquat
+npx @shianjeng/pkgguard uninstall  # takes it all out again
+```
+
+`init` finds what is on this machine and sets up each one:
+
+| Where | What init adds | On BLOCK | On WARN |
+| --- | --- | --- | --- |
+| Claude Code | the plugin, through `claude plugin install` | denied | asks you |
+| Cursor | a `beforeShellExecution` hook in `~/.cursor/hooks.json` | denied | asks you |
+| Codex CLI | a `PreToolUse` hook in `~/.codex/hooks.json` | denied | denied (Codex ignores "ask") |
+| Gemini CLI | a `BeforeTool` hook in `~/.gemini/settings.json` | denied | denied (Gemini ignores "ask") |
+| zsh, bash or fish | wrappers for `npm`, `npx`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `pipx`, `poetry`, `pdm` | not installed | asks you `[y/N]` |
+
+It copies the checking code to `~/.pkgguard`, so hooks keep working after npx clears its cache. It backs up each file before its first change (`<file>.pkgguard-backup`), adds or removes only pkgguard's own entries, leaves a file alone if it isn't plain JSON, and can be run again to update. `--dry-run` shows the plan without touching anything; `--only cursor,shell` limits it.
+
+Two things init cannot do for you: Codex runs new hooks only after you trust them with `/hooks`, and Cursor loads hooks when it starts, so restart it.
+
+### In your shell
+
+After `init` (open a new terminal), the package managers you type are checked first:
+
+```
+$ npm install expresss
+pkgguard checked 1 package from: npm install expresss
+
+✗ BLOCK expresss@0.0.0 (npm) · 932 downloads/week · since 2016
+    - Looks like the popular package "express" (one character off), but has only 932 downloads last week. Possible typosquat.
+    · No source repository listed.
+
+Not installed. If you are sure, run it with PKGGUARD_OFF=1 in front: PKGGUARD_OFF=1 npm install expresss
+
+$ npm install lodash
+pkgguard ✓ lodash
+```
+
+and then npm installs as usual.
+
+Commands that install nothing (`npm run build`, `pip list`) go straight through. The wrappers exist only in interactive shells, so scripts and CI are unaffected, and if pkgguard is missing or fails, the real command still runs. `pkgguard shell-init zsh` prints the same functions for your own dotfiles.
 
 ### Claude Code: skill plus an enforcing hook
 
@@ -130,7 +180,10 @@ Covered: `npm`/`pnpm`/`yarn`/`bun install` (lockfiles: `package-lock.json`, `pnp
 
 | Variable | |
 | --- | --- |
-| `PKGGUARD_ON_WARN` | What the Claude Code hook does on WARN: `ask` (default), `deny`, or `allow`. |
+| `PKGGUARD_ON_WARN` | What happens on WARN: `ask`, `deny`, or `allow`. Default `ask`, except in Codex and Gemini CLI, which cannot ask, where it is `deny`. |
+| `PKGGUARD_OFF` | Set for one command to skip the shell check: `PKGGUARD_OFF=1 npm install x`. |
+| `PKGGUARD_QUIET` | Hide the one-line `pkgguard ✓` note the shell prints for clean installs. |
+| `PKGGUARD_HOME` | Where `init` puts the checking code. Default `~/.pkgguard`. |
 | `PKGGUARD_NO_CACHE` | Set to re-check everything. By default clean results are reused for 6 hours, so retried installs are instant; flagged packages are always checked again. |
 | `PKGGUARD_CACHE_DIR` | Where the cache lives. Default: `$XDG_CACHE_HOME/pkgguard` or `~/.cache/pkgguard`. |
 
@@ -150,6 +203,8 @@ Formats: `package-lock.json` and `npm-shrinkwrap.json` (v1 to v3), `pnpm-lock.ya
 
 ## Limits
 
+- The shell wrappers cover the commands listed above, not `python -m pip`, and only in interactive zsh, bash and fish.
+- Cursor: in auto-run modes, an "ask" may let the command run without a prompt ([community report](https://dev.to/labyrinthlab/your-cursor-hook-says-ask-in-auto-review-the-command-may-just-run-36b9)); set `PKGGUARD_ON_WARN=deny` if you want warnings to stop it. Gemini CLI skips hooks when driven over ACP (`gemini --acp`).
 - A package that is old, popular and quietly malicious passes. pkgguard catches the common patterns, not everything; it is one layer, not a sandbox.
 - Private registries: scoped packages that an `.npmrc` maps to another registry (`@corp:registry=...`, read from the project, its parent directories, `~/.npmrc` and `npm_config_*`) are not looked up publicly. An unscoped package, or a PyPI package from a private index, still reports as "does not exist"; approve it yourself.
 - Transitive dependencies are only checked against malware reports. The full set of checks (lookalikes, fresh releases, install scripts) runs on packages named in the command or listed directly in a manifest.
@@ -179,7 +234,11 @@ Agent 凭记忆写包名，偶尔会写错，而攻击者会专门抢注这些�
 - `pkgguard scan` 一次检查整个项目的直接依赖和锁文件；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖
 - 检查结果为 OK 的包缓存 6 小时，重复安装几乎不耗时
 
-**Claude Code 安装（带强制 hook）：**
+**一条命令装好所有地方：** `npx @shianjeng/pkgguard init`
+
+它会自动找到本机的 Claude Code、Cursor、Codex CLI、Gemini CLI，逐个装上拦截 hook，并在 zsh / bash / fish 里包装 `npm`、`pip` 等命令，**你自己手敲的安装命令也会先检查**：有问题就不装，有警告就问你 `[y/N]`，没问题照常安装。改动前会先备份，可以重复运行，`pkgguard doctor` 会逐个验证是否真的能拦下仿冒包，`pkgguard uninstall` 一键移除。临时跳过一次检查：`PKGGUARD_OFF=1 npm install xxx`。
+
+**只装 Claude Code 插件：**
 
 ```
 /plugin marketplace add shianjeng/pkgguard
