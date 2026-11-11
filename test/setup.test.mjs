@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { context, installApp, stableNode, TARGETS } from '../skills/pkgguard/scripts/lib/setup.mjs';
-import { rcBlock, shellScript, WRAPPED, withoutRcBlock, withRcBlock } from '../skills/pkgguard/scripts/lib/shell.mjs';
+import { PYTHONS, rcBlock, shellScript, WRAPPED, withoutRcBlock, withRcBlock } from '../skills/pkgguard/scripts/lib/shell.mjs';
 import { VERSION } from '../skills/pkgguard/scripts/lib/version.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -255,19 +255,20 @@ function shellCase(t, shell, command, env = {}) {
   const dir = sandbox(t);
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
-  for (const tool of ['npm', 'pip']) fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\necho "REAL ${tool} $*"\n`, { mode: 0o755 });
+  for (const tool of ['npm', 'pip', 'python3']) fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\necho "REAL ${tool} $*"\n`, { mode: 0o755 });
+  // Notes each start, so a test can tell whether a command reached pkgguard at all.
   const node = path.join(bin, 'node-with-fake-registry');
-  fs.writeFileSync(node, `#!/bin/sh\nexec "${process.execPath}" --import "${FAKE_FETCH}" "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(node, `#!/bin/sh\necho "pkgguard started" >&2\nexec "${process.execPath}" --import "${FAKE_FETCH}" "$@"\n`, { mode: 0o755 });
   const script = path.join(dir, `pkgguard.${shell}`);
   fs.writeFileSync(script, shellScript(shell, { node, cli: path.join(ROOT, 'skills/pkgguard/scripts/pkgguard.mjs') }));
-  const r = spawnSync(shell, ['-c', `. "${script}"; ${command}`], {
+  const r = spawnSync(shell, ['-c', `${shell === 'fish' ? 'source' : '.'} "${script}"; ${command}`], {
     encoding: 'utf8',
     env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, PKGGUARD_NO_CACHE: '1', NO_COLOR: '1', ...env },
   });
   return { code: r.status, out: r.stdout + r.stderr };
 }
 
-for (const shell of ['bash', 'zsh']) {
+for (const shell of ['bash', 'zsh', 'fish']) {
   const available = spawnSync('sh', ['-c', `command -v ${shell}`]).status === 0;
   test(`${shell}: the wrapped package managers are checked and still run`, { skip: !available && `${shell} not installed` }, (t) => {
     const blocked = shellCase(t, shell, 'npm install expresss');
@@ -278,9 +279,28 @@ for (const shell of ['bash', 'zsh']) {
     // stdout and stderr are read separately, so only their contents can be compared, not the order
     assert.match(clean.out, /pkgguard ✓ lodash/);
     assert.match(clean.out, /REAL npm install lodash/);
-    assert.match(shellCase(t, shell, 'npm run build').out, /^REAL npm run build\n$/);
+    assert.match(shellCase(t, shell, 'npm run build').out, /^REAL npm run build\npkgguard started\n$/);
     assert.match(shellCase(t, shell, 'PKGGUARD_OFF=1 npm install expresss').out, /REAL npm install expresss/);
     assert.match(shellCase(t, shell, 'pip install reqeusts').out, /BLOCK reqeusts/);
+  });
+
+  test(`${shell}: python -m pip is checked, other python runs never start pkgguard`, { skip: !available && `${shell} not installed` }, (t) => {
+    const blocked = shellCase(t, shell, 'python3 -m pip install reqeusts');
+    assert.equal(blocked.code, 1);
+    assert.match(blocked.out, /BLOCK reqeusts/);
+    assert.doesNotMatch(blocked.out, /REAL python3/);
+    assert.match(shellCase(t, shell, 'python3 -I -X utf8 -m pip install reqeusts').out, /BLOCK reqeusts/);
+    assert.match(shellCase(t, shell, 'python3 -mpip install reqeusts').out, /BLOCK reqeusts/);
+    const clean = shellCase(t, shell, 'python3 -m pip install requests==2.0.0');
+    assert.equal(clean.code, 0);
+    assert.match(clean.out, /REAL python3 -m pip install requests==2\.0\.0/);
+    for (const run of ['python3 script.py -m pip install reqeusts', 'python3 -m venv .venv', 'python3 -c "print(1)"', 'python3']) {
+      const r = shellCase(t, shell, run);
+      assert.equal(r.code, 0, run);
+      assert.doesNotMatch(r.out, /pkgguard/, run);
+      assert.match(r.out, /^REAL python3/, run);
+    }
+    if (shell !== 'fish') assert.match(shellCase(t, shell, `python3 -c 'print("it''s")' "two words"`).out, /^REAL python3 -c print\("its"\) two words\n$/);
   });
 }
 
@@ -305,6 +325,12 @@ test('generated scripts wrap every package manager, in each shell syntax', () =>
     assert.ok(posix.includes(`function ${tool} { __pkgguard_run ${tool} "$@"; }`), tool);
     assert.ok(fish.includes(`function ${tool} --wraps ${tool}\n    __pkgguard_run ${tool} $argv\nend`), tool);
   }
+  for (const py of PYTHONS) {
+    assert.ok(posix.includes(`function ${py} { __pkgguard_py ${py} "$@"; }`), py);
+    assert.ok(fish.includes(`function ${py} --wraps ${py}\n    __pkgguard_py ${py} $argv\nend`), py);
+  }
+  // fish 4 no longer reads ? as a wildcard, so the fish script must not rely on it.
+  assert.doesNotMatch(fish, /case .*\?/);
   assert.ok(posix.includes(`__pkgguard_cli='/it'\\''s/pkgguard.mjs'`), 'POSIX single-quote escaping');
   assert.ok(fish.includes(`set -g __pkgguard_cli '/it\\'s/pkgguard.mjs'`), 'fish single-quote escaping');
 });

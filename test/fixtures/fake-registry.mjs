@@ -45,6 +45,8 @@ export const VULNS = {
   'npm:lodash@4.17.20': [{ id: 'GHSA-35jh-r3h4-6jhm', summary: 'Command injection in lodash' }],
   // the hijacked release from September 2025, as OSV reports it
   'npm:debug@4.4.2': [{ id: 'GHSA-4x49-vf9v-38px', summary: 'debug 4.4.2 contains malware' }, { id: 'MAL-2025-46974', summary: 'Malicious code in debug (npm)' }],
+  // an ordinary bug whose title happens to say "malicious"
+  'pypi:requests@2.32.3': [{ id: 'GHSA-9hjg-9r4m-mvj7', summary: 'Requests vulnerable to .netrc credentials leak via malicious URLs', database_specific: { cwe_ids: ['CWE-522'] } }],
 };
 
 function npmDoc(name, p) {

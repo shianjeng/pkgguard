@@ -177,6 +177,23 @@ export async function osvBatch(queries, options) {
   return answers.flat();
 }
 
+// A malware report, as opposed to an ordinary vulnerability: an OpenSSF
+// malicious-packages id (MAL-), CWE-506 "Embedded Malicious Code", or a title
+// that says the package itself carries malware. The word "malicious" alone is
+// not enough: "Requests vulnerable to .netrc credentials leak via malicious
+// URLs" is a bug in requests, not malware, and must not block it.
+const MALWARE_TITLE =
+  /^(malicious (code|package|version|release|module)s?|malware) in\b|\bembedded (malware|malicious)\b|\bis malware\b|\b(contains?|contained|containing|includes?|included|ships?|shipped|has|had|have) (a |an )?(malware|malicious (code|software|payload|script|crypto ?miner|dependency|version|release|package))\b/i;
+
+export function isMalware(vuln) {
+  return (
+    vuln.id.startsWith('MAL-') ||
+    (vuln.aliases ?? []).some((a) => a.startsWith('MAL-')) ||
+    (vuln.database_specific?.cwe_ids ?? []).includes('CWE-506') ||
+    MALWARE_TITLE.test(vuln.summary ?? '')
+  );
+}
+
 export async function osvVulns(ecosystem, name, version, options) {
   const body = { package: { name, ecosystem: ecosystem === 'npm' ? 'npm' : 'PyPI' } };
   if (version) body.version = version;
@@ -185,10 +202,6 @@ export async function osvVulns(ecosystem, name, version, options) {
     id: v.id,
     summary: v.summary ?? '',
     aliases: v.aliases ?? [],
-    malicious:
-      v.id.startsWith('MAL-') ||
-      (v.aliases ?? []).some((a) => a.startsWith('MAL-')) ||
-      /\b(malware|malicious)\b/i.test(v.summary ?? '') ||
-      (v.database_specific?.cwe_ids ?? []).includes('CWE-506'),
+    malicious: isMalware(v),
   }));
 }

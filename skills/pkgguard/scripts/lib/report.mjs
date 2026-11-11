@@ -73,3 +73,85 @@ export function renderResults(results, { command = null, notes = [], audience = 
 export function overall(results, notes = []) {
   return verdictOf([...results.map((r) => ({ level: r.verdict })), ...notes]);
 }
+
+// ---- Markdown, for CI job summaries and pull request comments ----
+
+const MD = { ok: '✅', info: '✅', warn: '⚠️', block: '❌' };
+const WORD = { ok: 'OK', info: 'OK', warn: 'WARN', block: 'BLOCK' };
+
+// Package authors write deprecation notes, install scripts and advisory
+// summaries, and all of that ends up in the report. None of it may turn into a
+// link, an image, a mention, HTML or a broken table on a pull request.
+export function mdText(text) {
+  return String(text)
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/[\\`*_{}[\]()#+!|~]/g, '\\$&')
+    .replace(/@/g, '@&#8203;')
+    .replace(/:\/\//g, ':&#47;&#47;');
+}
+
+// A code span that holds any text, backticks and table pipes included.
+export function mdCode(text) {
+  const t = String(text).replace(/\s*[\r\n]+\s*/g, ' ').replace(/\|/g, '\\|');
+  const longest = Math.max(0, ...(t.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = /^`|`$/.test(t) ? ' ' : '';
+  return `${fence}${pad}${t}${pad}${fence}`;
+}
+
+function mdHeadline(result) {
+  const id = result.version && result.kind !== 'external' && result.kind !== 'computed' ? `${result.name}@${result.version}` : result.name;
+  const bits = [result.ecosystem];
+  const facts = result.facts;
+  if (result.kind === 'external') bits.push('not from the registry');
+  if (result.kind === 'computed') bits.push('name computed at run time');
+  if (facts?.downloads !== null && facts?.downloads !== undefined && facts.exists !== false) bits.push(`${compact(facts.downloads)} downloads/week`);
+  if (facts?.created) bits.push(`since ${facts.created.slice(0, 4)}`);
+  if (result.from) bits.push(`in ${mdText(result.from)}`);
+  return `${mdCode(id)} <sub>${bits.join(' · ')}</sub>`;
+}
+
+const MD_VERDICT = {
+  block: '**Do not merge yet.** Each ❌ package is likely malicious, a typo of the package that was meant, or not on the registry at all. Remove it, or replace it with the package that was meant.',
+  warn: '**Worth a look before merging.** Check each ⚠️ finding above.',
+  ok: 'No suspicious dependencies found.',
+};
+
+export function renderMarkdown(results, { notes = [], sources = [], newOnly = false, version = null } = {}) {
+  const verdict = overall(results, notes);
+  const shown = verdict === 'info' ? 'ok' : verdict;
+  const lines = [`### ${MD[shown]} pkgguard: ${WORD[shown]}`, ''];
+
+  const looked = results.filter((r) => !r.locked).length;
+  const from = sources.length ? ` from ${sources.map((s) => mdCode(s.path)).join(', ')}` : '';
+  if (looked) lines.push(newOnly ? `Checked ${looked} new dependenc${looked === 1 ? 'y' : 'ies'}${from} (not pinned in the lockfile yet).` : `Checked ${looked} package${looked === 1 ? '' : 's'}${from}.`, '');
+  else if (!results.length && !notes.length) lines.push(newOnly ? `Nothing new to check${from}: the lockfile already pins every dependency.` : `No dependencies to check${from}.`, '');
+
+  const flagged = results.filter((r) => r.verdict === 'block' || r.verdict === 'warn');
+  if (flagged.length) {
+    lines.push('| | Package | Findings |', '| --- | --- | --- |');
+    for (const r of flagged.sort((a, b) => (a.verdict === b.verdict ? 0 : a.verdict === 'block' ? -1 : 1))) {
+      const findings = r.findings.map((f) => (f.level === 'info' ? `<sub>${mdText(f.text)}</sub>` : mdText(f.text)));
+      lines.push(`| ${MD[r.verdict]}&nbsp;${WORD[r.verdict]} | ${mdHeadline(r)} | ${findings.join('<br>') || '—'} |`);
+    }
+    lines.push('');
+  }
+
+  const clean = results.filter((r) => r.verdict !== 'block' && r.verdict !== 'warn');
+  if (clean.length) {
+    const names = clean.map((r) => mdCode(r.name));
+    const list = names.slice(0, 200).join(' · ') + (names.length > 200 ? ` · … (+${names.length - 200})` : '');
+    if (flagged.length) lines.push(`<details><summary>✅ ${clean.length} more with no findings</summary>`, '', list, '', '</details>', '');
+    else lines.push(list, '');
+  }
+
+  for (const note of notes) lines.push(`- ${MD[note.level]} ${mdText(note.text)}`);
+  if (notes.length) lines.push('');
+
+  lines.push(MD_VERDICT[shown], '');
+  lines.push(`<sub>Checked by [pkgguard](https://github.com/shianjeng/pkgguard)${version ? ` ${version}` : ''}.</sub>`);
+  return `${lines.join('\n')}\n`;
+}

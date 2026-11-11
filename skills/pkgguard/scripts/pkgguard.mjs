@@ -14,7 +14,7 @@ import { checkAll } from './lib/check.mjs';
 import { sweepLockfiles, sweepReport } from './lib/lockfiles.mjs';
 import { expandInstalls, projectManifests } from './lib/manifests.mjs';
 import { findInstalls, parseNpmSpec, parsePySpec } from './lib/parse.mjs';
-import { overall, renderResults } from './lib/report.mjs';
+import { overall, renderMarkdown, renderResults } from './lib/report.mjs';
 import { askTerminal, guard } from './lib/guard.mjs';
 import { context, installApp, installedVersion, selfTest, TARGETS } from './lib/setup.mjs';
 import { SHELLS, shellScript } from './lib/shell.mjs';
@@ -26,7 +26,7 @@ const USAGE = `Usage:
   pkgguard uninstall [--yes]
   pkgguard npm:<package>[@version] pypi:<package>[==version] ...
   pkgguard --cmd "<install command>"
-  pkgguard scan [dir] [--new-only]
+  pkgguard scan [dir] [--new-only] [--markdown <file>]
 
   init        set pkgguard up in every coding agent on this machine and in
               your shell, so npm, pip and friends you type are checked too
@@ -42,6 +42,9 @@ const USAGE = `Usage:
               transitive) against OSV malware reports
   --fail-on   warn (default) or block: the lowest verdict that exits non-zero
   --json      print machine-readable results
+  --markdown <file>
+              also write the report as Markdown, for a CI job summary or a
+              pull request comment ("-" prints it instead of the text report)
   --no-cache  re-check packages that came back clean in the last 6 hours
 
 Exit codes: 0 ok, 1 warn, 2 block, 3 usage error`;
@@ -243,6 +246,8 @@ async function main(argv) {
   const newOnly = flag(args, '--new-only');
   const noLockfile = flag(args, '--no-lockfile');
   const failOn = option(args, '--fail-on') ?? 'warn';
+  const markdown = option(args, '--markdown');
+  if (markdown === '-' && json) throw new Error('--json and --markdown - both print to stdout; pick one');
   if (!['warn', 'block'].includes(failOn)) throw new Error('--fail-on takes "warn" or "block"');
 
   let packages;
@@ -272,7 +277,16 @@ async function main(argv) {
   }
 
   if (noLockfile) lockfiles = [];
+  // Writes the Markdown report if asked for; true when it took the text report's place on stdout.
+  const writeMarkdown = (results, notes) => {
+    if (markdown === undefined) return false;
+    const text = renderMarkdown(results, { notes, sources, newOnly, version: VERSION });
+    if (markdown === '-') process.stdout.write(text);
+    else fs.writeFileSync(markdown, text);
+    return markdown === '-';
+  };
   if (!packages.length && !notes.length && !lockfiles.length) {
+    if (writeMarkdown([], [])) return 0;
     if (json) process.stdout.write(`${JSON.stringify({ verdict: 'ok', results: [], sources }, null, 2)}\n`);
     else process.stdout.write(`${nothingToCheck(sources)}\n`);
     return 0;
@@ -286,8 +300,10 @@ async function main(argv) {
   const results = [...checked, ...swept.results];
   notes = [...notes, ...swept.notes];
   const verdict = overall(results, notes);
-  if (json) process.stdout.write(`${JSON.stringify({ verdict, results, notes, sources }, null, 2)}\n`);
-  else process.stdout.write(renderResults(results, { command, notes }));
+  if (!writeMarkdown(results, notes)) {
+    if (json) process.stdout.write(`${JSON.stringify({ verdict, results, notes, sources }, null, 2)}\n`);
+    else process.stdout.write(renderResults(results, { command, notes }));
+  }
   if (failOn === 'block' && verdict === 'warn') return 0;
   return EXIT[verdict];
 }
