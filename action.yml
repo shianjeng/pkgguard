@@ -18,6 +18,15 @@ inputs:
   lockfile:
     description: Also check every package the lockfile pins, transitive ones included, against OSV malware reports (one request).
     default: "true"
+  comment:
+    description: >-
+      On pull requests, post the report as a comment and update that same comment on every push.
+      Needs "permissions: pull-requests: write". A clean result is posted only to replace an earlier finding,
+      and a comment that cannot be written (pull requests from forks) is a warning, never a failure.
+    default: "false"
+  github-token:
+    description: Token for the pull request comment.
+    default: ${{ github.token }}
 
 outputs:
   verdict:
@@ -34,10 +43,14 @@ runs:
         NEW_ONLY: ${{ inputs.new-only }}
         FAIL_ON: ${{ inputs.fail-on }}
         LOCKFILE: ${{ inputs.lockfile }}
+        COMMENT: ${{ inputs.comment }}
+        COMMENT_TOKEN: ${{ inputs.github-token }}
+        ACTION_DIR: ${{ github.action_path }}
         PKGGUARD: ${{ github.action_path }}/skills/pkgguard/scripts/pkgguard.mjs
       run: |
         case "$FAIL_ON" in block|warn) ;; *) echo "::error title=pkgguard::fail-on must be block or warn, got '$FAIL_ON'"; exit 2 ;; esac
-        args=(scan "$SCAN_PATH" --no-cache --fail-on warn)
+        markdown="$(mktemp "${RUNNER_TEMP:-/tmp}/pkgguard.XXXXXX")"
+        args=(scan "$SCAN_PATH" --no-cache --fail-on warn --markdown "$markdown")
         [ "$NEW_ONLY" = "true" ] && args+=(--new-only)
         [ "$LOCKFILE" = "false" ] && args+=(--no-lockfile)
 
@@ -53,13 +66,7 @@ runs:
         [ "$code" -eq 2 ] && verdict=block
         echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
-        {
-          echo "### pkgguard: $(printf '%s' "$verdict" | tr '[:lower:]' '[:upper:]')"
-          echo
-          echo '```'
-          printf '%s\n' "$report"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
+        cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
 
         # One annotation per flagged package, so the problem shows on the run page.
         printf '%s\n' "$report" | while IFS= read -r line; do
@@ -68,5 +75,10 @@ runs:
             "! WARN  "*) echo "::warning title=pkgguard::${line#! WARN  }" ;;
           esac
         done
+
+        if [ "$COMMENT" = "true" ]; then
+          GITHUB_TOKEN="$COMMENT_TOKEN" node "$ACTION_DIR/action/comment.mjs" "$markdown" "$verdict" "$SCAN_PATH"
+        fi
+        rm -f "$markdown"
 
         if [ "$verdict" = block ] || { [ "$verdict" = warn ] && [ "$FAIL_ON" = warn ]; }; then exit 1; fi

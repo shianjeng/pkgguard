@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { checkPackage } from '../skills/pkgguard/scripts/lib/check.mjs';
+import { checkPackage, distinct } from '../skills/pkgguard/scripts/lib/check.mjs';
 import { findInstalls } from '../skills/pkgguard/scripts/lib/parse.mjs';
+import { isMalware } from '../skills/pkgguard/scripts/lib/registries.mjs';
 import { renderResults } from '../skills/pkgguard/scripts/lib/report.mjs';
 import { editDistance, lookalike } from '../skills/pkgguard/scripts/lib/similar.mjs';
 import { fakeFetch, NOW } from './fixtures/fake-registry.mjs';
@@ -152,6 +153,49 @@ test('deprecations and known vulnerabilities warn', async () => {
   const old = await check('npm i lodash@4.17.20');
   assert.equal(old.version, '4.17.20');
   assert.ok(codes(old).includes('warn:vulnerable'));
+});
+
+test('a vulnerability that mentions "malicious" is not a malware report', async () => {
+  const result = await check('pip install requests==2.32.3');
+  assert.equal(result.verdict, 'warn');
+  assert.ok(codes(result).includes('warn:vulnerable'));
+  assert.ok(!codes(result).includes('block:malicious'));
+});
+
+test('malware reports are told apart from vulnerabilities by id, CWE and title', () => {
+  const malware = [
+    { id: 'MAL-2025-46969', summary: 'Malicious code in chalk (npm)' },
+    { id: 'GHSA-4x49-vf9v-38px', aliases: ['MAL-2025-46974'], summary: 'debug@4.4.2 contains malware after npm account takeover' },
+    { id: 'GHSA-mh6f-8j2x-4483', summary: 'Critical severity vulnerability that affects event-stream and flatmap-stream', database_specific: { cwe_ids: ['CWE-506'] } },
+    { id: 'GHSA-67r3-h899-9w95', summary: 'Embedded Malicious Code in ctx' },
+    { id: 'GHSA-pjwm-rvh2-c87w', summary: 'Embedded malware in ua-parser-js' },
+    { id: 'PYSEC-2024-154', summary: 'A number of releases of ultralytics contained malicious crypto miner software.' },
+    { id: 'GHSA-9x64-5r7x-2q53', summary: 'Malicious Package in flatmap-stream' },
+    { id: 'GHSA-c2m4-w5hm-vqjw', summary: 'crossenv is malware' },
+  ];
+  const bugs = [
+    'Requests vulnerable to .netrc credentials leak via malicious URLs',
+    'Denial of service when parsing a malicious server response',
+    'Attackers can execute malicious code via template injection',
+    'XSS via maliciously crafted Markdown',
+    'Malicious websites can read files through the dev server',
+    // real titles from the 2,000 most downloaded npm and PyPI packages
+    'Babel vulnerable to arbitrary code execution when compiling specifically crafted malicious code',
+    'Jinja has a sandbox breakout through malicious filenames',
+    'NLTK: Missing Post-Download Integrity Verification Allows Malicious Package Injection',
+  ].map((summary, i) => ({ id: `GHSA-bug${i}`, summary }));
+  for (const v of malware) assert.ok(isMalware(v), v.summary);
+  for (const v of bugs) assert.ok(!isMalware(v), v.summary);
+});
+
+test('one flaw listed by several databases counts once', () => {
+  const vulns = [
+    { id: 'PYSEC-2026-1872', aliases: ['CVE-2024-47081', 'GHSA-9hjg-9r4m-mvj7'], summary: '' },
+    { id: 'GHSA-9hjg-9r4m-mvj7', aliases: ['CVE-2024-47081', 'PYSEC-2026-1872'], summary: 'Requests vulnerable to .netrc credentials leak' },
+    { id: 'GHSA-gc5v-m9x4-r6x2', aliases: ['CVE-2024-35195'], summary: 'Insecure temp file reuse' },
+    { id: 'PYSEC-2024-99', aliases: ['CVE-2024-35195'], summary: 'same flaw, other database' },
+  ];
+  assert.deepEqual(distinct(vulns).map((v) => v.id), ['GHSA-9hjg-9r4m-mvj7', 'GHSA-gc5v-m9x4-r6x2']);
 });
 
 test('a version that does not exist is blocked', async () => {

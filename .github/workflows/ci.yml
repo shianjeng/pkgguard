@@ -10,6 +10,9 @@ on:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -23,6 +26,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
+      # So the fish shell functions are tested too; bash and zsh are already there.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fish zsh
       - run: npm test
 
   live:
@@ -44,6 +50,9 @@ jobs:
   action:
     # Runs this repository's action the way a user's workflow would.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -54,6 +63,8 @@ jobs:
         uses: ./
         with:
           path: test/fixtures/action-ok
+          # A clean result with no earlier comment only reads the comments, so read access is enough.
+          comment: true
       - name: A typosquat fails the step
         id: bad
         uses: ./

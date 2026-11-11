@@ -61,6 +61,21 @@ function unverifiable(pkg, registry) {
   return result(pkg, [{ level: 'warn', code: pkg.kind, text }]);
 }
 
+// OSV lists one flaw once per database that tracks it (a GHSA and a PYSEC id
+// naming each other as aliases, both with the same CVE). Count it once, keeping
+// the record that has a title.
+export function distinct(vulns) {
+  const seen = new Set();
+  const kept = [];
+  for (const v of [...vulns].sort((a, b) => Number(!a.summary) - Number(!b.summary))) {
+    const names = [v.id, ...(v.aliases ?? [])];
+    if (names.some((n) => seen.has(n))) continue;
+    for (const n of names) seen.add(n);
+    kept.push(v);
+  }
+  return kept;
+}
+
 export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registries = null } = {}) {
   const options = { fetchImpl };
   const { ecosystem, name } = pkg;
@@ -89,7 +104,7 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
   const downloads = downloadsResult.error ? null : downloadsResult.value;
   const vulnsResult = await settle(osvVulns(ecosystem, name, facts.exists ? facts.version : null, options));
   const vulns = vulnsResult.value ?? [];
-  const malicious = vulns.filter((v) => v.malicious);
+  const malicious = distinct(vulns.filter((v) => v.malicious));
   const similar = lookalike(ecosystem, name);
 
   // Missing data must be visible: a check that could not run is not a pass.
@@ -221,10 +236,10 @@ export async function checkPackage(pkg, { fetchImpl, now = Date.now(), registrie
   }
   if (facts.deprecated) add('warn', 'deprecated', `Deprecated: ${facts.deprecated}`);
 
-  const known = vulns.filter((v) => !v.malicious);
+  const known = distinct(vulns.filter((v) => !v.malicious));
   if (known.length) {
     const listed = known.slice(0, 3).map((v) => `${v.id}${v.summary ? ` (${v.summary})` : ''}`).join('; ');
-    add('warn', 'vulnerable', `${known.length} known vulnerabilit${known.length === 1 ? 'y' : 'ies'} in ${facts.version}: ${listed}${known.length > 3 ? '; ...' : ''}.`);
+    add('warn', 'vulnerable', `${known.length} known vulnerabilit${known.length === 1 ? 'y' : 'ies'} in ${facts.version}: ${listed}${known.length > 3 ? `; and ${known.length - 3} more` : ''}.`);
   }
 
   if (downloads !== null && downloads < LIMITS.fewDownloads && !findings.some((f) => f.code === 'lookalike')) {

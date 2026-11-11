@@ -4,6 +4,10 @@
 // If pkgguard is missing or fails, the real command still runs.
 
 export const WRAPPED = ['npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'pip', 'pip3', 'uv', 'uvx', 'pipx', 'poetry', 'pdm'];
+// `python -m pip install x` is how pip's own docs say to install. Only that
+// form is checked; every other python run goes straight to the interpreter
+// without starting Node.
+export const PYTHONS = ['python', 'python3'];
 export const SHELLS = ['zsh', 'bash', 'fish'];
 
 const single = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`;
@@ -40,6 +44,37 @@ function __pkgguard_run
 end
 
 ${WRAPPED.map((tool) => `function ${tool} --wraps ${tool}\n    __pkgguard_run ${tool} $argv\nend`).join('\n')}
+
+# python -m pip ... is checked; any other python run is passed straight through.
+# Comparisons carry an x in front so a value like -m is never read as an option.
+function __pkgguard_py
+    set -l rest $argv
+    set -e rest[1]
+    set -l skip 0
+    set -l prev x
+    for arg in $rest
+        if test $skip -eq 1
+            set skip 0
+        else if test "x$prev" = x-m
+            if test "x$arg" = xpip
+                __pkgguard_run $argv
+                return
+            end
+            break
+        else if test "x$arg" = x-mpip
+            __pkgguard_run $argv
+            return
+        else if contains -- $arg -W -X
+            set skip 1
+        else if contains -- $arg - -c; or not string match -q -- '-*' $arg
+            break
+        end
+        set prev $arg
+    end
+    command $argv
+end
+
+${PYTHONS.map((py) => `function ${py} --wraps ${py}\n    __pkgguard_py ${py} $argv\nend`).join('\n')}
 `;
   }
   // zsh and bash share one script. `function name { }` rather than `name() { }`
@@ -65,6 +100,29 @@ __pkgguard_run() {
 }
 
 ${WRAPPED.map((tool) => `function ${tool} { __pkgguard_run ${tool} "$@"; }`).join('\n')}
+
+# python -m pip ... is checked; any other python run is passed straight through.
+__pkgguard_py() {
+  local arg prev= skip=
+  for arg in "\${@:2}"; do
+    if [ -n "$skip" ]; then skip=; continue; fi
+    if [ "$prev" = -m ]; then
+      if [ "$arg" = pip ]; then __pkgguard_run "$@"; return; fi
+      break
+    fi
+    case $arg in
+      -mpip) __pkgguard_run "$@"; return ;;
+      -W|-X) skip=1 ;;
+      -c) break ;;
+      -?*) ;;
+      *) break ;;
+    esac
+    prev=$arg
+  done
+  command "$@"
+}
+
+${PYTHONS.map((py) => `function ${py} { __pkgguard_py ${py} "$@"; }`).join('\n')}
 `;
 }
 

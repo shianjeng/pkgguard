@@ -71,7 +71,9 @@ pkgguard ✓ lodash
 
 and then npm installs as usual.
 
-Commands that install nothing (`npm run build`, `pip list`) go straight through. The wrappers exist only in interactive shells, so scripts and CI are unaffected, and if pkgguard is missing or fails, the real command still runs. `pkgguard shell-init zsh` prints the same functions for your own dotfiles.
+Wrapped: `npm`, `npx`, `pnpm`, `pnpx`, `yarn`, `bun`, `bunx`, `pip`, `pip3`, `uv`, `uvx`, `pipx`, `poetry`, `pdm`, and `python -m pip` (as `python` or `python3`, the form pip's own docs recommend). Any other `python` run goes straight to the interpreter without starting pkgguard at all.
+
+Commands that install nothing (`npm run build`, `pip list`) go straight through. The wrappers exist only in interactive shells, so scripts and CI are unaffected, and if pkgguard is missing or fails, the real command still runs. `pkgguard shell-init zsh` prints the same functions for your own dotfiles. In zsh, `which npm` now prints the wrapper; `whence -p npm` still shows the program it runs.
 
 ### Claude Code: skill plus an enforcing hook
 
@@ -123,15 +125,25 @@ npx @shianjeng/pkgguard scan --new-only   # only what the lockfile doesn't pin y
 ### GitHub Action
 
 ```yaml
-- uses: actions/checkout@v7
-- uses: shianjeng/pkgguard@v0
-  with:
-    new-only: true      # check what a pull request adds; drop it to check everything
-    # fail-on: warn     # default: block
-    # lockfile: false   # skip the malware check of every locked package
+permissions:
+  contents: read
+  pull-requests: write  # only for comment: true
+
+steps:
+  - uses: actions/checkout@v7
+  - uses: shianjeng/pkgguard@v0
+    with:
+      new-only: true      # check what a pull request adds; drop it to check everything
+      comment: true       # report on the pull request itself
+      # fail-on: warn     # default: block
+      # lockfile: false   # skip the malware check of every locked package
 ```
 
 The step fails on BLOCK (or WARN with `fail-on: warn`), annotates each flagged package, writes the report to the job summary, and sets a `verdict` output.
+
+With `comment: true` the report also goes on the pull request as one comment, a table of each flagged package and why, which later pushes update instead of piling up new ones. A clean pull request gets no comment, unless it replaces an earlier finding with the all-clear. Pull requests from forks only get a read-only token, so there the comment is skipped with a warning and the check itself still runs. Text from the registry (deprecation notes, install scripts, advisory titles) is escaped, so a package cannot put links, images or @mentions into the comment.
+
+Outside Actions, `pkgguard scan --markdown report.md` writes the same report for any CI that shows Markdown.
 
 The npm package is scoped because npm refuses the bare name `pkgguard` as too close to an unrelated `pkg-guard`. Nobody can publish `pkgguard` itself, and only this project can publish under `@shianjeng`. `npm install -g @shianjeng/pkgguard` installs a `pkgguard` command.
 
@@ -203,7 +215,7 @@ Formats: `package-lock.json` and `npm-shrinkwrap.json` (v1 to v3), `pnpm-lock.ya
 
 ## Limits
 
-- The shell wrappers cover the commands listed above, not `python -m pip`, and only in interactive zsh, bash and fish.
+- The shell wrappers cover the commands listed above (`python -m pip` only as `python` or `python3`, not `python3.12`), and only in interactive zsh, bash and fish.
 - Cursor: in auto-run modes, an "ask" may let the command run without a prompt ([community report](https://dev.to/labyrinthlab/your-cursor-hook-says-ask-in-auto-review-the-command-may-just-run-36b9)); set `PKGGUARD_ON_WARN=deny` if you want warnings to stop it. Gemini CLI skips hooks when driven over ACP (`gemini --acp`).
 - A package that is old, popular and quietly malicious passes. pkgguard catches the common patterns, not everything; it is one layer, not a sandbox.
 - Private registries: scoped packages that an `.npmrc` maps to another registry (`@corp:registry=...`, read from the project, its parent directories, `~/.npmrc` and `npm_config_*`) are not looked up publicly. An unscoped package, or a PyPI package from a private index, still reports as "does not exist"; approve it yourself.
@@ -231,12 +243,12 @@ Agent 凭记忆写包名，偶尔会写错，而攻击者会专门抢注这些�
 - `.npmrc` 里映射到私有源的 scope（`@corp:registry=...`）不会被误报为“不存在”
 - Agent 把包名写进 `package.json` / `requirements.txt` / `pyproject.toml` 再执行不带参数的 `npm install`、`pip install -r`、`uv sync`，同样会被检查（会跟踪 `cd web &&`），只查锁文件里还没有的依赖
 - 只要安装是按锁文件来的（`npm ci`、不带参数的 `npm install`、`uv sync` 等），锁文件里的每一个包（包括间接依赖）都会一次性和 OSV 恶意包库比对，像 2025 年被劫持的 `debug@4.4.2` 这类版本会被直接拦下
-- `pkgguard scan` 一次检查整个项目的直接依赖和锁文件；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖
+- `pkgguard scan` 一次检查整个项目的直接依赖和锁文件；GitHub Action（`uses: shianjeng/pkgguard@v0`）可以在 PR 里自动检查新增依赖，加上 `comment: true` 会把结果以表格形式评论在 PR 上，之后每次推送都更新同一条评论（需要 `pull-requests: write` 权限）
 - 检查结果为 OK 的包缓存 6 小时，重复安装几乎不耗时
 
 **一条命令装好所有地方：** `npx @shianjeng/pkgguard init`
 
-它会自动找到本机的 Claude Code、Cursor、Codex CLI、Gemini CLI，逐个装上拦截 hook，并在 zsh / bash / fish 里包装 `npm`、`pip` 等命令，**你自己手敲的安装命令也会先检查**：有问题就不装，有警告就问你 `[y/N]`，没问题照常安装。改动前会先备份，可以重复运行，`pkgguard doctor` 会逐个验证是否真的能拦下仿冒包，`pkgguard uninstall` 一键移除。临时跳过一次检查：`PKGGUARD_OFF=1 npm install xxx`。
+它会自动找到本机的 Claude Code、Cursor、Codex CLI、Gemini CLI，逐个装上拦截 hook，并在 zsh / bash / fish 里包装 `npm`、`pip`、`python -m pip` 等命令，**你自己手敲的安装命令也会先检查**：有问题就不装，有警告就问你 `[y/N]`，没问题照常安装。改动前会先备份，可以重复运行，`pkgguard doctor` 会逐个验证是否真的能拦下仿冒包，`pkgguard uninstall` 一键移除。临时跳过一次检查：`PKGGUARD_OFF=1 npm install xxx`。
 
 **只装 Claude Code 插件：**
 

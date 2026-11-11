@@ -355,11 +355,24 @@ function detectNode(program, args) {
   return [];
 }
 
+// For `python [options] -m pip ...` (or the short `-mpip`), the words pip
+// gets; null for any other run. Interpreter options end at the first word
+// that is not one, so `python tool.py -m pip install x` runs tool.py, not pip.
+function pipArgs(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-mpip') return args.slice(i + 1);
+    if (arg === '-m') return args[i + 1] === 'pip' ? args.slice(i + 2) : null;
+    if (arg === '-W' || arg === '-X') i++;
+    else if (arg === '-c' || arg === '-' || !arg.startsWith('-')) return null;
+  }
+  return null;
+}
+
 function detectPython(program, args) {
   if (/^python(\d+(\.\d+)?)?$/.test(program)) {
-    const m = args.indexOf('-m');
-    if (m === -1 || args[m + 1] !== 'pip') return [];
-    return detectPython('pip', args.slice(m + 2));
+    const pip = pipArgs(args);
+    return pip ? detectPython('pip', pip) : [];
   }
   if (program === 'uvx') {
     const from = flagValues(args, new Set(['--from']));
@@ -427,8 +440,8 @@ function xargsCommand(args) {
 function manifestInstalls(program, args) {
   const dirFlag = (names) => flagValues(args, new Set(names))[0] ?? null;
   if (/^python(\d+(\.\d+)?)?$/.test(program)) {
-    const m = args.indexOf('-m');
-    return m !== -1 && args[m + 1] === 'pip' ? manifestInstalls('pip', args.slice(m + 2)) : [];
+    const pip = pipArgs(args);
+    return pip ? manifestInstalls('pip', pip) : [];
   }
   if (NODE_PROGRAMS.has(program) && program !== 'deno') {
     const { sub, rest } = subcommand(args, NODE_VALUE_FLAGS);

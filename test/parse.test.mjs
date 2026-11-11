@@ -45,6 +45,11 @@ test('python family', () => {
     ['manifest:requirements.txt'],
   );
   assert.deepEqual(names('python3 -m pip install Django_REST.framework'), ['pypi:django-rest-framework']);
+  assert.deepEqual(names('python -I -X utf8 -m pip install reqeusts'), ['pypi:reqeusts']);
+  assert.deepEqual(names('python3.12 -mpip install flask'), ['pypi:flask']);
+  assert.deepEqual(names('python tool.py -m pip install flask'), [], 'the -m belongs to tool.py');
+  assert.deepEqual(names('python -c "import x" -m pip install flask'), []);
+  assert.deepEqual(names('python -m venv .venv'), []);
   assert.deepEqual(names('uv add httpx && uv pip install rich && uvx ruff check'), ['pypi:httpx', 'pypi:rich', 'pypi:ruff']);
   assert.deepEqual(names('uvx --from black==24.1.0 black .'), ['pypi:black@24.1.0']);
   assert.deepEqual(names('pipx install poetry && poetry add pydantic'), ['pypi:poetry', 'pypi:pydantic']);
